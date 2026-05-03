@@ -15,7 +15,7 @@
       <div v-for="(item, i) in legendItems" :key="i" class="legend-row">
         <div class="legend-left">
           <div class="legend-dot" :style="{ background: item.color }"></div>
-          <span class="legend-label">{{ item.label }}</span>
+          <span class="legend-label" :title="item.label">{{ item.label }}</span>
         </div>
         <div class="legend-val">{{ formatCostDisplay(item.value) }} <span class="legend-pct">{{ item.pct }}%</span></div>
       </div>

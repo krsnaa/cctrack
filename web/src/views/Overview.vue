@@ -253,19 +253,13 @@ const costBreakdownSlices = computed(() => {
 // dashboard reads as one color story; cycles if there are more than 8 projects.
 const projectColors = ['#f59e0b', '#0ea5e9', '#10b981', '#a78bfa', '#fbbf24', '#ec4899', '#78716c', '#44403c']
 
-// Project paths can run very long (multi-segment iCloud / worktree paths).
-// Truncate at the data layer too so the donut tooltip and chartjs label
-// stay readable; CSS ellipsis handles legend layout.
-function truncateMid(name: string, max = 36): string {
-  if (name.length <= max) return name
-  const head = Math.ceil((max - 1) / 2)
-  const tail = Math.floor((max - 1) / 2)
-  return `${name.slice(0, head)}…${name.slice(name.length - tail)}`
-}
-
+// Send the full project name through; the legend ellipsizes via CSS and
+// surfaces the full string in a native title-attribute tooltip, while
+// chart.js shows it in full when hovering a donut slice. Truncating at
+// the data layer would lose the hover affordance.
 const projectSpendSlices = computed(() =>
   projectSpend.value.slice(0, 8).map((p, i) => ({
-    label: truncateMid(p.project || '(no project)'),
+    label: p.project || '(no project)',
     value: p.cost,
     color: projectColors[i % projectColors.length],
   })),
