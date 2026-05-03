@@ -40,7 +40,7 @@ const windowOptions = [
   { days: 365, label: 'Year' },
 ]
 
-const windowDays = ref(90)
+const windowDays = ref(30)
 const data = ref<DailySpend[]>([])
 
 const windowLabel = computed(
