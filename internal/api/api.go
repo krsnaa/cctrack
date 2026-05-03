@@ -94,8 +94,9 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if dir == "" {
 		dir = "desc"
 	}
+	date := r.URL.Query().Get("date") // YYYY-MM-DD (local day) or empty
 
-	sessions, total, err := a.store.ListSessions(limit, offset, sort, dir)
+	sessions, total, err := a.store.ListSessions(limit, offset, sort, dir, date)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -106,6 +107,7 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		"total":    total,
 		"limit":    limit,
 		"offset":   offset,
+		"date":     date,
 	})
 }
 

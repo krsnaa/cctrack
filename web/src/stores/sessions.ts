@@ -12,18 +12,31 @@ export const useSessionsStore = defineStore('sessions', () => {
   // is more useful than ranking by all-time cost.
   const sortBy = ref('date')
   const sortDir = ref<'asc' | 'desc'>('desc')
+  const dateFilter = ref('') // YYYY-MM-DD (local day) or '' for no filter
   const selectedSession = ref<Session | null>(null)
   const loading = ref(false)
 
   async function load() {
     loading.value = true
     try {
-      const res = await fetchSessions(limit.value, offset.value, sortBy.value, sortDir.value)
+      const res = await fetchSessions(
+        limit.value,
+        offset.value,
+        sortBy.value,
+        sortDir.value,
+        dateFilter.value,
+      )
       sessions.value = res.sessions || []
       total.value = res.total
     } finally {
       loading.value = false
     }
+  }
+
+  function setDateFilter(date: string) {
+    dateFilter.value = date
+    offset.value = 0
+    load()
   }
 
   function setSort(col: string) {
@@ -60,8 +73,8 @@ export const useSessionsStore = defineStore('sessions', () => {
   }
 
   return {
-    sessions, total, limit, offset, sortBy, sortDir,
+    sessions, total, limit, offset, sortBy, sortDir, dateFilter,
     selectedSession, loading,
-    load, setSort, nextPage, prevPage, selectSession, clearSelection,
+    load, setSort, setDateFilter, nextPage, prevPage, selectSession, clearSelection,
   }
 })

@@ -16,9 +16,13 @@ export async function fetchSessions(
   limit = 25,
   offset = 0,
   sort = 'cost',
-  dir = 'desc'
+  dir = 'desc',
+  date = ''
 ): Promise<SessionsResponse> {
-  return get<SessionsResponse>(`/sessions?limit=${limit}&offset=${offset}&sort=${sort}&dir=${dir}`)
+  const datePart = date ? `&date=${encodeURIComponent(date)}` : ''
+  return get<SessionsResponse>(
+    `/sessions?limit=${limit}&offset=${offset}&sort=${sort}&dir=${dir}${datePart}`,
+  )
 }
 
 export async function fetchSession(id: string): Promise<Session> {

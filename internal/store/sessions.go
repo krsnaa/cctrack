@@ -151,7 +151,10 @@ var allowedSortColumns = map[string]string{
 	"project": "project",
 }
 
-func (s *Store) ListSessions(limit, offset int, sortBy, sortDir string) ([]Session, int, error) {
+// ListSessions returns paginated sessions, optionally filtered to a single
+// local-day (date "YYYY-MM-DD"; empty string = no filter). The total count
+// reflects the same filter so pagination math stays correct on filtered views.
+func (s *Store) ListSessions(limit, offset int, sortBy, sortDir, date string) ([]Session, int, error) {
 	col, ok := allowedSortColumns[sortBy]
 	if !ok {
 		col = "total_cost"
@@ -161,18 +164,25 @@ func (s *Store) ListSessions(limit, offset int, sortBy, sortDir string) ([]Sessi
 		dir = "ASC"
 	}
 
+	whereClause := ""
+	args := []any{}
+	if date != "" {
+		whereClause = "WHERE DATE(last_activity, 'localtime') = ?"
+		args = append(args, date)
+	}
+
 	var total int
-	err := s.db.QueryRow("SELECT COUNT(*) FROM sessions").Scan(&total)
-	if err != nil {
+	countQuery := "SELECT COUNT(*) FROM sessions " + whereClause
+	if err := s.db.QueryRow(countQuery, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
 
 	query := fmt.Sprintf(`SELECT id, project, slug, model, started_at, last_activity,
 		total_input, total_output, total_cache_read,
 		total_cache_write_5m, total_cache_write_1h, total_cost
-		FROM sessions ORDER BY %s %s LIMIT ? OFFSET ?`, col, dir)
+		FROM sessions %s ORDER BY %s %s LIMIT ? OFFSET ?`, whereClause, col, dir)
 
-	rows, err := s.db.Query(query, limit, offset)
+	rows, err := s.db.Query(query, append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, err
 	}

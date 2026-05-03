@@ -17,6 +17,7 @@
 
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { Bar } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -28,6 +29,8 @@ import {
 import type { DailySpend } from '../../types'
 import { formatCostDisplay } from '../../composables/useFormatCost'
 import { fetchDaily } from '../../api'
+
+const router = useRouter()
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip)
 
@@ -88,9 +91,22 @@ const chartData = computed(() => {
   }
 })
 
+function handleBarClick(_event: any, elements: any[]) {
+  if (!elements.length) return
+  const idx = elements[0].index
+  const point = data.value[idx]
+  if (!point?.date) return
+  router.push({ path: '/sessions', query: { date: point.date } })
+}
+
 const chartOptions = {
   responsive: true,
   maintainAspectRatio: false,
+  onClick: handleBarClick,
+  onHover: (event: any, elements: any[]) => {
+    const target = event?.native?.target
+    if (target) target.style.cursor = elements.length ? 'pointer' : 'default'
+  },
   animation: {
     duration: 700,
     easing: 'easeOutQuart' as const,

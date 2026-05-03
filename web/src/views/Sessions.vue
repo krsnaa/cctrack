@@ -2,7 +2,15 @@
   <div>
     <div class="page-header">
       <h1 class="page-title">Sessions</h1>
-      <div class="page-meta">{{ store.total }} total</div>
+      <div class="page-meta">
+        {{ store.total }} {{ store.dateFilter ? 'on ' + dateFilterLabel : 'total' }}
+      </div>
+    </div>
+
+    <div v-if="store.dateFilter" class="filter-bar">
+      <span class="filter-label">Filtered by date:</span>
+      <span class="filter-value">{{ dateFilterLabel }}</span>
+      <button class="filter-clear" @click="clearFilter" aria-label="Clear filter">×</button>
     </div>
 
     <div class="sessions-table-wrap">
@@ -59,16 +67,41 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted, watch } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
 import { useSessionsStore } from '../stores/sessions'
 import SessionRow from '../components/domain/SessionRow.vue'
 import SessionDetail from '../components/domain/SessionDetail.vue'
 import SlideOver from '../components/primitives/SlideOver.vue'
 
 const store = useSessionsStore()
+const route = useRoute()
+const router = useRouter()
 
-onMounted(() => {
-  store.load()
+// URL query is the source of truth for the date filter so a bookmarked
+// /sessions?date=2026-05-03 reproduces the filtered view.
+function syncFromRoute() {
+  const date = (route.query.date as string) || ''
+  if (date !== store.dateFilter) {
+    store.setDateFilter(date)
+  } else if (!store.sessions.length) {
+    store.load()
+  }
+}
+
+onMounted(syncFromRoute)
+watch(() => route.query.date, syncFromRoute)
+
+function clearFilter() {
+  router.replace({ query: { ...route.query, date: undefined } })
+}
+
+const dateFilterLabel = computed(() => {
+  if (!store.dateFilter) return ''
+  // Same local-midnight parsing trick used in DailySpendChart — bare YYYY-MM-DD
+  // would otherwise be interpreted as UTC midnight and shift a day west.
+  const d = new Date(store.dateFilter + 'T00:00:00')
+  return d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })
 })
 </script>
 
@@ -93,6 +126,40 @@ onMounted(() => {
   color: var(--text-tertiary);
   padding-bottom: 4px;
 }
+
+.filter-bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  background: rgba(245, 158, 11, 0.06);
+  border: 1px solid rgba(245, 158, 11, 0.2);
+  font-size: 12px;
+  animation: fadeSlideUp 0.3s ease both;
+}
+.filter-label {
+  color: var(--text-tertiary);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 10.5px;
+}
+.filter-value {
+  color: var(--amber-400);
+  font-family: 'JetBrains Mono', monospace;
+}
+.filter-clear {
+  margin-left: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-tertiary);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 var(--space-2);
+  transition: color 120ms;
+}
+.filter-clear:hover { color: var(--text-primary); }
 
 .sessions-table-wrap {
   background: var(--bg-surface);
