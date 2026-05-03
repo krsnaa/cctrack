@@ -98,6 +98,7 @@ export interface Settings {
 
 export interface ModelRate {
   Family: string
+  Released: string
   InputPerMToken: number
   OutputPerMToken: number
   CacheReadPerMToken: number

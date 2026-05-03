@@ -12,6 +12,7 @@
         <thead>
           <tr>
             <th>Model</th>
+            <th>Released</th>
             <th class="right">Input</th>
             <th class="right">Output</th>
             <th class="right">Cache Read</th>
@@ -22,6 +23,7 @@
         <tbody>
           <tr v-for="rate in rates" :key="rate.Family">
             <td class="model-name">{{ rate.Family }}</td>
+            <td class="released">{{ rate.Released || '—' }}</td>
             <td class="price right">${{ rate.InputPerMToken.toFixed(2) }}</td>
             <td class="price right">${{ rate.OutputPerMToken.toFixed(2) }}</td>
             <td class="price right">${{ rate.CacheReadPerMToken.toFixed(2) }}</td>
@@ -108,6 +110,12 @@ td.right { text-align: right; }
 .model-name {
   font-family: 'JetBrains Mono', monospace;
   color: var(--text-primary);
+}
+.released {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
 }
 .price {
   font-family: 'JetBrains Mono', monospace;
