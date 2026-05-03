@@ -4,8 +4,12 @@
       <div class="window-bar-head">
         <span class="window-bar-title">{{ w.title }}</span>
         <span class="window-bar-meta">
-          <span :class="['pace', w.paceClass]" v-if="w.paceText">{{ w.paceText }}</span>
-          <span class="sep" v-if="w.paceText">·</span>
+          <span class="time-pct">{{ w.timePct.toFixed(1) }}%</span>
+          <template v-if="w.paceText">
+            <span class="sep">·</span>
+            <span :class="['pace', w.paceClass]">{{ w.paceText }}</span>
+          </template>
+          <span class="sep">·</span>
           <span class="remaining">{{ w.remaining }} left</span>
         </span>
       </div>
@@ -147,8 +151,10 @@ const bars = computed(() => {
 .window-bar-meta .sep {
   color: var(--text-disabled);
 }
+.window-bar-meta .time-pct { color: var(--text-primary); }
 .window-bar-meta .pace.over { color: var(--cost-high); }
 .window-bar-meta .pace.under { color: #4ade80; }
+.window-bar-meta .pace { color: var(--text-tertiary); }
 .window-bar-meta .remaining { color: var(--text-tertiary); }
 
 .window-bar-track {
