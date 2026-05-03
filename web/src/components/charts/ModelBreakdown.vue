@@ -7,7 +7,7 @@
     <div class="model-bars">
       <div v-for="(group, i) in familyGroups" :key="group.family" class="model-bar-row">
         <div class="bar-label">
-          <span class="bar-family">{{ familyDisplayName(group.family) }}</span>
+          <span class="bar-family">{{ formatFamily(group.family) }}</span>
           <span class="bar-cost">{{ formatCostDisplay(group.cost) }}</span>
         </div>
         <div class="bar-track">
@@ -32,13 +32,29 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted } from 'vue'
 import type { ModelSummary } from '../../types'
-import { formatCostDisplay } from '../../composables/useFormatCost'
+import { formatCostDisplay, formatFamily } from '../../composables/useFormatCost'
+import { useRates } from '../../composables/useRates'
 
 const props = defineProps<{ models: ModelSummary[] }>()
 
-const familyColors = ['#f59e0b', '#fbbf24', '#78716c', '#44403c']
+// Eight-color palette ordered for high contrast on adjacent bars. Earlier
+// versions had 4 colors which started repeating once the rate card was split
+// into per-version families (Opus 4 / 4.1 / 4.5 / 4.6 / 4.7 etc).
+const familyColors = [
+  '#f59e0b', // amber
+  '#0ea5e9', // sky
+  '#10b981', // emerald
+  '#a78bfa', // violet
+  '#fbbf24', // amber light
+  '#ec4899', // pink
+  '#78716c', // stone
+  '#44403c', // stone dark
+]
+
+const { rates, load: loadRates } = useRates()
+onMounted(loadRates)
 
 const totalCost = computed(() => props.models.reduce((s, m) => s + m.total_cost, 0))
 
@@ -65,18 +81,24 @@ function barWidth(cost: number) {
   return Math.max((cost / max) * 100, 2)
 }
 
-function familyDisplayName(family: string): string {
-  if (family.includes('opus')) return 'Opus'
-  if (family.includes('sonnet')) return 'Sonnet'
-  if (family.includes('haiku')) return 'Haiku'
-  return family
-}
-
-// Estimate savings: if all Opus spend were Sonnet instead (Sonnet is 5x cheaper)
+// Estimate savings if Opus spend were redirected to Sonnet. Computed from the
+// live rate card: for each Opus group, scale its actual cost by Sonnet's output
+// rate / that Opus version's output rate. Output dominates LLM costs and
+// scaling input identically would over-state cache-heavy workloads.
 const savingsEstimate = computed(() => {
-  const opusGroup = familyGroups.value.find(g => g.family.includes('opus'))
-  if (!opusGroup) return 0
-  return opusGroup.cost * (1 - 1/5) // Sonnet is ~5x cheaper than Opus
+  if (!rates.value.length) return 0
+  const sonnetRate = rates.value
+    .filter(r => r.Family.startsWith('claude-sonnet-4'))
+    .reduce((min, r) => Math.min(min, r.OutputPerMToken), Infinity)
+  if (!isFinite(sonnetRate)) return 0
+  let saved = 0
+  for (const group of familyGroups.value) {
+    if (!group.family.includes('opus')) continue
+    const opus = rates.value.find(r => r.Family === group.family)
+    if (!opus || opus.OutputPerMToken <= sonnetRate) continue
+    saved += group.cost * (1 - sonnetRate / opus.OutputPerMToken)
+  }
+  return saved
 })
 </script>
 
