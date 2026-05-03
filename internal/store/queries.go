@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/ksred/cctrack/internal/calculator"
@@ -173,6 +174,77 @@ type ProjectMonthly struct {
 	Project string  `json:"project"`
 	Month   string  `json:"month"`
 	Cost    float64 `json:"cost"`
+}
+
+// ProjectGroup is one row in the grouped Sessions view: a project with its
+// roll-up stats, optionally restricted to sessions active on a given local day.
+type ProjectGroup struct {
+	Project      string  `json:"project"`
+	SessionCount int     `json:"session_count"`
+	TotalCost    float64 `json:"total_cost"`
+	TotalTokens  int64   `json:"total_tokens"`
+	StartedAt    string  `json:"started_at"`    // MIN across child sessions
+	LastActivity string  `json:"last_activity"` // MAX across child sessions
+}
+
+var projectGroupSortColumns = map[string]string{
+	"cost":    "total_cost",
+	"date":    "last_activity",
+	"started": "started_at",
+	"tokens":  "total_tokens",
+	"project": "project",
+}
+
+// GetProjectGroups returns project-level rollups for the Sessions grouped view.
+// When date is "" all projects are returned; otherwise only projects with at
+// least one session whose local-day last_activity equals `date`. Roll-up totals
+// are computed from the *full lifetime* of those matching sessions, matching
+// the semantic the Daily Spend chart already uses.
+func (s *Store) GetProjectGroups(date, sortBy, sortDir string) ([]ProjectGroup, error) {
+	col, ok := projectGroupSortColumns[sortBy]
+	if !ok {
+		col = "last_activity"
+	}
+	dir := "DESC"
+	if sortDir == "asc" {
+		dir = "ASC"
+	}
+
+	whereClause := ""
+	args := []any{}
+	if date != "" {
+		whereClause = "WHERE DATE(last_activity, 'localtime') = ?"
+		args = append(args, date)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT project,
+			COUNT(*) as session_count,
+			SUM(total_cost) as total_cost,
+			SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h) as total_tokens,
+			MIN(started_at) as started_at,
+			MAX(last_activity) as last_activity
+		FROM sessions
+		%s
+		GROUP BY project
+		ORDER BY %s %s`, whereClause, col, dir)
+
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var groups []ProjectGroup
+	for rows.Next() {
+		var g ProjectGroup
+		if err := rows.Scan(&g.Project, &g.SessionCount, &g.TotalCost, &g.TotalTokens,
+			&g.StartedAt, &g.LastActivity); err != nil {
+			return nil, err
+		}
+		groups = append(groups, g)
+	}
+	return groups, nil
 }
 
 func (s *Store) GetProjects() ([]ProjectSummary, error) {

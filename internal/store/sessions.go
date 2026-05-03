@@ -1,6 +1,9 @@
 package store
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type Session struct {
 	ID                string  `json:"id"`
@@ -152,9 +155,10 @@ var allowedSortColumns = map[string]string{
 }
 
 // ListSessions returns paginated sessions, optionally filtered to a single
-// local-day (date "YYYY-MM-DD"; empty string = no filter). The total count
-// reflects the same filter so pagination math stays correct on filtered views.
-func (s *Store) ListSessions(limit, offset int, sortBy, sortDir, date string) ([]Session, int, error) {
+// local-day (date "YYYY-MM-DD") and/or project (exact match). Empty string on
+// either argument means "no filter on this dimension." The total count reflects
+// the same filters so pagination math stays correct on filtered views.
+func (s *Store) ListSessions(limit, offset int, sortBy, sortDir, date, project string) ([]Session, int, error) {
 	col, ok := allowedSortColumns[sortBy]
 	if !ok {
 		col = "total_cost"
@@ -164,11 +168,19 @@ func (s *Store) ListSessions(limit, offset int, sortBy, sortDir, date string) ([
 		dir = "ASC"
 	}
 
-	whereClause := ""
+	conds := []string{}
 	args := []any{}
 	if date != "" {
-		whereClause = "WHERE DATE(last_activity, 'localtime') = ?"
+		conds = append(conds, "DATE(last_activity, 'localtime') = ?")
 		args = append(args, date)
+	}
+	if project != "" {
+		conds = append(conds, "project = ?")
+		args = append(args, project)
+	}
+	whereClause := ""
+	if len(conds) > 0 {
+		whereClause = "WHERE " + strings.Join(conds, " AND ")
 	}
 
 	var total int

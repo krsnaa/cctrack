@@ -26,6 +26,7 @@ func New(s *store.Store, h *hub.Hub, cfg *config.Config) *API {
 func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/summary", a.handleSummary)
 	mux.HandleFunc("GET /api/v1/sessions", a.handleSessions)
+	mux.HandleFunc("GET /api/v1/sessions/grouped", a.handleSessionsGrouped)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", a.handleSession)
 	mux.HandleFunc("GET /api/v1/recent", a.handleRecent)
 	mux.HandleFunc("GET /api/v1/daily", a.handleDaily)
@@ -94,9 +95,10 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if dir == "" {
 		dir = "desc"
 	}
-	date := r.URL.Query().Get("date") // YYYY-MM-DD (local day) or empty
+	date := r.URL.Query().Get("date")       // YYYY-MM-DD (local day) or empty
+	project := r.URL.Query().Get("project") // exact project match or empty
 
-	sessions, total, err := a.store.ListSessions(limit, offset, sort, dir, date)
+	sessions, total, err := a.store.ListSessions(limit, offset, sort, dir, date, project)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -108,6 +110,31 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		"limit":    limit,
 		"offset":   offset,
 		"date":     date,
+		"project":  project,
+	})
+}
+
+func (a *API) handleSessionsGrouped(w http.ResponseWriter, r *http.Request) {
+	sort := r.URL.Query().Get("sort")
+	if sort == "" {
+		sort = "date"
+	}
+	dir := r.URL.Query().Get("dir")
+	if dir == "" {
+		dir = "desc"
+	}
+	date := r.URL.Query().Get("date") // YYYY-MM-DD (local day) or empty
+
+	groups, err := a.store.GetProjectGroups(date, sort, dir)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"groups": groups,
+		"total":  len(groups),
+		"date":   date,
 	})
 }
 
