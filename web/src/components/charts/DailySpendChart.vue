@@ -1,8 +1,13 @@
 <template>
   <div class="chart-card">
     <div class="chart-header">
-      <div class="chart-title">Daily Spend — Last 90 Days</div>
-      <div class="chart-meta">{{ totalStr }} total</div>
+      <div class="chart-title">Daily Spend — Last {{ windowLabel }}</div>
+      <div class="chart-controls">
+        <select v-model.number="windowDays" @change="reload" class="window-select" aria-label="Time range">
+          <option v-for="opt in windowOptions" :key="opt.days" :value="opt.days">{{ opt.label }}</option>
+        </select>
+        <div class="chart-meta">{{ totalStr }} total</div>
+      </div>
     </div>
     <div class="chart-canvas-wrap">
       <Bar v-if="chartData" :data="chartData" :options="chartOptions" />
@@ -11,7 +16,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { Bar } from 'vue-chartjs'
 import {
   Chart as ChartJS,
@@ -22,21 +27,42 @@ import {
 } from 'chart.js'
 import type { DailySpend } from '../../types'
 import { formatCostDisplay } from '../../composables/useFormatCost'
+import { fetchDaily } from '../../api'
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip)
 
-const props = defineProps<{ data: DailySpend[] }>()
+const windowOptions = [
+  { days: 7, label: 'Week' },
+  { days: 30, label: 'Month' },
+  { days: 60, label: '2 Months' },
+  { days: 90, label: 'Quarter' },
+  { days: 180, label: '6 Months' },
+  { days: 365, label: 'Year' },
+]
+
+const windowDays = ref(90)
+const data = ref<DailySpend[]>([])
+
+const windowLabel = computed(
+  () => windowOptions.find(o => o.days === windowDays.value)?.label ?? `${windowDays.value} Days`,
+)
+
+async function reload() {
+  data.value = (await fetchDaily(windowDays.value)) ?? []
+}
+
+onMounted(reload)
 
 const totalStr = computed(() => {
-  const total = props.data.reduce((sum, d) => sum + d.cost, 0)
+  const total = data.value.reduce((sum, d) => sum + d.cost, 0)
   return formatCostDisplay(total)
 })
 
 const chartData = computed(() => {
-  if (!props.data.length) return null
+  if (!data.value.length) return null
 
-  const labels = props.data.map((d, i) => {
-    if (i === props.data.length - 1) return 'Today'
+  const labels = data.value.map((d, i) => {
+    if (i === data.value.length - 1) return 'Today'
     // d.date is "YYYY-MM-DD" representing a local calendar day. `new Date(s)`
     // parses bare dates as UTC midnight, which then renders as the previous
     // day in any timezone west of UTC. Append T00:00:00 to force local-zone
@@ -45,7 +71,7 @@ const chartData = computed(() => {
     return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
   })
 
-  const values = props.data.map(d => d.cost)
+  const values = data.value.map(d => d.cost)
   const colors = values.map((_, i) =>
     i === values.length - 1 ? 'rgba(251,191,36,1)' : 'rgba(245,158,11,0.55)'
   )
@@ -131,6 +157,29 @@ const chartOptions = {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-tertiary);
+}
+.chart-controls {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+.window-select {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: border-color 120ms, color 120ms;
+}
+.window-select:hover {
+  border-color: var(--amber-500);
+  color: var(--text-primary);
+}
+.window-select:focus {
+  outline: none;
+  border-color: var(--amber-500);
 }
 .chart-meta {
   font-family: 'JetBrains Mono', monospace;

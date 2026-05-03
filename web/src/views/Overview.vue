@@ -37,7 +37,7 @@
     </div>
 
     <div class="charts-row" v-if="store.summary">
-      <DailySpendChart :data="store.daily" />
+      <DailySpendChart />
       <TokenDonut
         v-if="store.summary.cost_breakdown"
         :inputCost="store.summary.cost_breakdown.input_cost"
