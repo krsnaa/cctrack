@@ -34,6 +34,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/settings", a.handlePostSettings)
 	mux.HandleFunc("GET /api/v1/projects", a.handleProjects)
 	mux.HandleFunc("GET /api/v1/projects/monthly", a.handleProjectMonthly)
+	mux.HandleFunc("GET /api/v1/projects/prev-month", a.handleProjectsPrevMonth)
 	mux.HandleFunc("GET /api/v1/rates", a.handleRates)
 	mux.HandleFunc("GET /api/v1/models", a.handleModels)
 	mux.HandleFunc("GET /api/v1/heatmap", a.handleHeatmap)
@@ -211,6 +212,15 @@ func (a *API) handleProjects(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) handleProjectMonthly(w http.ResponseWriter, r *http.Request) {
 	data, err := a.store.GetProjectMonthly()
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, data)
+}
+
+func (a *API) handleProjectsPrevMonth(w http.ResponseWriter, r *http.Request) {
+	data, err := a.store.GetProjectsPrevMonth()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return

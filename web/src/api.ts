@@ -70,6 +70,10 @@ export async function fetchProjectMonthly(): Promise<ProjectMonthly[]> {
   return get<ProjectMonthly[]>('/projects/monthly')
 }
 
+export async function fetchProjectsPrevMonth(): Promise<ProjectMonthly[]> {
+  return get<ProjectMonthly[]>('/projects/prev-month')
+}
+
 export async function fetchRates(): Promise<RatesResponse> {
   return get<RatesResponse>('/rates')
 }

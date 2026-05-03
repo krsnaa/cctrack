@@ -295,6 +295,40 @@ func (s *Store) GetProjects() ([]ProjectSummary, error) {
 	return projects, nil
 }
 
+// GetProjectsPrevMonth returns spend per project for the previous full local
+// calendar month, descending by cost. Drives the "Spend by Project · last
+// month" donut on the Overview.
+func (s *Store) GetProjectsPrevMonth() ([]ProjectMonthly, error) {
+	now := time.Now()
+	prevMonthStart := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+	thisMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
+	monthLabel := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, now.Location()).Format("2006-01")
+
+	rows, err := s.db.Query(`
+		SELECT project, SUM(total_cost) as cost
+		FROM sessions
+		WHERE DATE(last_activity, 'localtime') >= ?
+		  AND DATE(last_activity, 'localtime') < ?
+		GROUP BY project
+		HAVING cost > 0
+		ORDER BY cost DESC`, prevMonthStart, thisMonthStart)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var data []ProjectMonthly
+	for rows.Next() {
+		var pm ProjectMonthly
+		if err := rows.Scan(&pm.Project, &pm.Cost); err != nil {
+			return nil, err
+		}
+		pm.Month = monthLabel
+		data = append(data, pm)
+	}
+	return data, nil
+}
+
 func (s *Store) GetProjectMonthly() ([]ProjectMonthly, error) {
 	rows, err := s.db.Query(`
 		SELECT project,
