@@ -12,12 +12,6 @@ type Config struct {
 	Port               int     `json:"port"`
 	MonthlyBudgetUSD   float64 `json:"monthly_budget_usd"`
 	OpenBrowserOnServe bool    `json:"open_browser_on_serve"`
-	// WeeklyResetWeekday is the day of the week the Anthropic weekly limit
-	// resets (0=Sunday..6=Saturday). Default 2=Tuesday matches the Max plan
-	// at the time of writing; users on different billing cycles can adjust.
-	WeeklyResetWeekday int `json:"weekly_reset_weekday"`
-	// WeeklyResetHour is the local hour-of-day (0..23) the weekly limit resets.
-	WeeklyResetHour int `json:"weekly_reset_hour"`
 }
 
 func DefaultConfig() *Config {
@@ -28,8 +22,6 @@ func DefaultConfig() *Config {
 		Port:               7432,
 		MonthlyBudgetUSD:   0,
 		OpenBrowserOnServe: true,
-		WeeklyResetWeekday: 2, // Tuesday
-		WeeklyResetHour:    3, // 03:00 local
 	}
 }
 

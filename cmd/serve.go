@@ -73,7 +73,7 @@ var serveCmd = &cobra.Command{
 					}
 				}
 				// Broadcast summary update
-				summary, err := s.GetSummary(cfg.WeeklyResetWeekday, cfg.WeeklyResetHour)
+				summary, err := s.GetSummary()
 				if err == nil {
 					payload, _ := json.Marshal(summary)
 					h.Broadcast("summary.updated", payload)
