@@ -14,20 +14,29 @@
         </span>
       </div>
       <div class="window-bar-track" :title="w.tooltip">
-        <!-- Usage fill: cost so far as a fraction of the previous window's
-             total cost. Clamped to 100% visually; actual value shown in pace. -->
+        <!-- Usage fill: cost as a fraction of cap (or prev-window cost when
+             no cap is known). Clamped to 100% visually; actual % in pace. -->
         <div class="window-bar-fill" :style="{ width: w.usageWidth + '%' }"></div>
         <!-- Time marker: where we are in the window's clock. Sliding white
              line; if fill is to its right, you're over pace, and vice versa. -->
         <div class="window-bar-marker" :style="{ left: w.timePct + '%' }"></div>
       </div>
-      <div class="window-bar-resets">Resets {{ w.resetsAt }}</div>
+      <div class="window-bar-resets">
+        <span>Resets {{ w.resetsAt }}</span>
+        <span v-if="w.syncedLabel" class="sep">·</span>
+        <span v-if="w.syncedLabel" :class="['synced', { stale: w.syncStale }]">
+          synced {{ w.syncedLabel }}
+        </span>
+        <span class="sep">·</span>
+        <RouterLink to="/settings" class="resync-link">re-sync</RouterLink>
+      </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed } from 'vue'
+import { RouterLink } from 'vue-router'
 import type { WindowBucket } from '../../types'
 
 const props = defineProps<{
@@ -77,6 +86,8 @@ interface Bar {
   remaining: string
   resetsAt: string   // human-readable absolute reset moment, e.g. "Tue 03:00"
   tooltip: string
+  syncedLabel: string // "4h ago", or "" if never synced
+  syncStale: boolean  // sync older than the window's own duration
 }
 
 function fmtResetMoment(end: string, longHorizon: boolean): string {
@@ -95,11 +106,31 @@ function fmtResetMoment(end: string, longHorizon: boolean): string {
   })
 }
 
+function syncAgeLabel(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const ms = Date.now() - new Date(iso).getTime()
+  if (ms < 0 || Number.isNaN(ms)) return ''
+  const m = Math.floor(ms / 60000)
+  if (m < 1) return 'just now'
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  const d = Math.floor(h / 24)
+  return `${d}d ago`
+}
+
 function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): Bar | null {
   if (!w?.start) return null
   const timePct = Math.round(pctElapsed(w.start, w.end) * 10) / 10
   const remaining = remainingLabel(w.end)
   const resetsAt = fmtResetMoment(w.end, longHorizon)
+  const syncedLabel = syncAgeLabel(w.last_synced_at)
+  // "Stale" = sync is older than this window's own duration. A 5h sync from
+  // 6h ago has cycled at least once in reality, so the displayed end-time is
+  // very likely past Anthropic's actual reset.
+  const windowMs = new Date(w.end).getTime() - new Date(w.start).getTime()
+  const syncMs = w.last_synced_at ? Date.now() - new Date(w.last_synced_at).getTime() : 0
+  const syncStale = !!w.last_synced_at && syncMs > windowMs
 
   // Denominator preference: cap (synced from claude.ai) > prev_cost (cascade
   // fallback). The cap is plan-level, so it survives anchor expiry and gives
@@ -117,7 +148,7 @@ function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): 
     return {
       title, timePct, usagePct: 0, usageWidth: 0,
       paceText: 'sync to enable', paceClass: '',
-      remaining, resetsAt, tooltip,
+      remaining, resetsAt, tooltip, syncedLabel, syncStale,
     }
   }
   const usagePct = (w.cost / denom) * 100
@@ -128,7 +159,10 @@ function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): 
   const sign = delta > 0 ? '+' : ''
   const paceClass = delta > 5 ? 'over' : delta < -5 ? 'under' : ''
   const paceText = `${sign}${Math.round(delta)}% pace`
-  return { title, timePct, usagePct, usageWidth, paceText, paceClass, remaining, resetsAt, tooltip }
+  return {
+    title, timePct, usagePct, usageWidth, paceText, paceClass,
+    remaining, resetsAt, tooltip, syncedLabel, syncStale,
+  }
 }
 
 const bars = computed(() => {
@@ -217,5 +251,28 @@ const bars = computed(() => {
   font-size: 10.5px;
   color: var(--text-disabled);
   margin-top: 2px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.window-bar-resets .sep {
+  color: var(--border-subtle);
+}
+.window-bar-resets .synced {
+  color: var(--text-tertiary);
+}
+.window-bar-resets .synced.stale {
+  color: var(--cost-high);
+}
+.resync-link {
+  color: var(--text-tertiary);
+  text-decoration: underline;
+  text-decoration-color: var(--border-default);
+  text-underline-offset: 2px;
+  transition: color 120ms;
+}
+.resync-link:hover {
+  color: var(--amber-400);
 }
 </style>

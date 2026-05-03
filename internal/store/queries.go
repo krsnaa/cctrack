@@ -31,6 +31,10 @@ type WindowBucket struct {
 	// from the most recent sync against claude.ai (cost / pct). Nil when no
 	// sync with a percentage exists yet — clients fall back to prev_cost.
 	Cap *float64 `json:"cap,omitempty"`
+	// LastSyncedAt is when the user last anchored this window from claude.ai.
+	// Surfaced on the bar so a stale anchor is visible at a glance — sync
+	// drift accumulates and re-syncs are how the user corrects it.
+	LastSyncedAt *string `json:"last_synced_at,omitempty"`
 }
 
 type SpendBucket struct {
@@ -140,6 +144,10 @@ func (s *Store) windowFromAnchorOrCascade(windowType string, duration time.Durat
 	cap, err := s.GetLatestCap(windowType)
 	if err == nil && cap != nil {
 		bucket.Cap = cap
+	}
+	if a != nil && a.SyncedAt != "" {
+		ts := a.SyncedAt
+		bucket.LastSyncedAt = &ts
 	}
 	return bucket, nil
 }

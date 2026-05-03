@@ -24,6 +24,7 @@ export interface WindowBucket {
   prev_cost: number
   prev_start: string
   cap?: number | null
+  last_synced_at?: string | null
 }
 
 export interface WindowAnchor {
