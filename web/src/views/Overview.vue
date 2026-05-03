@@ -89,30 +89,46 @@
       <ActivityHeatmap :cells="heatmap" />
     </div>
 
-    <div class="section-header" v-if="store.recentSessions.length">
+    <div class="section-header" v-if="recentGroups.length">
       <div class="section-title">Recent Sessions</div>
       <router-link class="view-all" to="/sessions">View all →</router-link>
     </div>
 
-    <div class="sessions-table-wrap" v-if="store.recentSessions.length">
+    <div class="sessions-table-wrap" v-if="recentGroups.length">
       <table>
         <thead>
           <tr>
-            <th style="width:40px">#</th>
-            <th>Session</th>
+            <th style="width:40px"></th>
+            <th>Project</th>
+            <th>Started</th>
             <th>Last Active</th>
             <th class="right">Tokens</th>
             <th class="right">Cost</th>
           </tr>
         </thead>
         <tbody>
-          <SessionRow
-            v-for="(session, i) in store.recentSessions"
-            :key="session.id"
-            :session="session"
-            :rank="i + 1"
-            @select="openSession"
-          />
+          <template v-for="group in recentGroups" :key="group.project">
+            <ProjectGroupRow
+              :group="group"
+              :expanded="sessionsStore.expanded.has(group.project)"
+              @toggle="sessionsStore.toggleExpand"
+            />
+            <template v-if="sessionsStore.expanded.has(group.project)">
+              <tr v-if="sessionsStore.childLoading.has(group.project)" class="loading-row">
+                <td></td>
+                <td colspan="5">Loading sessions…</td>
+              </tr>
+              <SessionRow
+                v-for="(session, i) in (sessionsStore.childSessions.get(group.project) || [])"
+                :key="session.id"
+                :session="session"
+                :rank="i + 1"
+                show-started
+                subordinate
+                @select="openSession"
+              />
+            </template>
+          </template>
         </tbody>
       </table>
     </div>
@@ -153,6 +169,7 @@
 <script setup lang="ts">
 import { ref, onMounted, computed, watch } from 'vue'
 import { useDashboardStore } from '../stores/dashboard'
+import { useSessionsStore } from '../stores/sessions'
 import StatCard from '../components/primitives/StatCard.vue'
 import DailySpendChart from '../components/charts/DailySpendChart.vue'
 import Donut from '../components/charts/Donut.vue'
@@ -160,6 +177,7 @@ import ModelBreakdown from '../components/charts/ModelBreakdown.vue'
 import ActivityHeatmap from '../components/charts/ActivityHeatmap.vue'
 import WindowBars from '../components/charts/WindowBars.vue'
 import SessionRow from '../components/domain/SessionRow.vue'
+import ProjectGroupRow from '../components/domain/ProjectGroupRow.vue'
 import SessionDetail from '../components/domain/SessionDetail.vue'
 import SlideOver from '../components/primitives/SlideOver.vue'
 import TimeRangeSelect, { type TimeRange } from '../components/primitives/TimeRangeSelect.vue'
@@ -167,7 +185,12 @@ import type { Session, ModelSummary, HeatmapCell, ProjectMonthly, CostBreakdown 
 import { fetchSession, fetchModels, fetchHeatmap, fetchProjectsSpend, fetchCostBreakdown } from '../api'
 
 const store = useDashboardStore()
+const sessionsStore = useSessionsStore()
 const selectedSession = ref<Session | null>(null)
+
+// Top N most-recently-active projects for the Overview preview. The full
+// list lives at /sessions; here we just show enough to scan at a glance.
+const recentGroups = computed(() => sessionsStore.groups.slice(0, 8))
 const models = ref<ModelSummary[]>([])
 const heatmap = ref<HeatmapCell[]>([])
 const projectSpend = ref<ProjectMonthly[]>([])
@@ -298,6 +321,10 @@ async function loadHeatmap() {
 
 onMounted(() => {
   if (!store.loaded) store.load()
+  // Reset any date filter the user may have set on the Sessions tab — the
+  // Overview preview is a global "what have I been working on" view, not a
+  // filtered slice. setDateFilter triggers loadGroups internally.
+  sessionsStore.setDateFilter('')
   Promise.all([loadModels(), loadCostBreakdown(), loadProjectSpend(), loadHeatmap()])
 })
 </script>
@@ -416,5 +443,11 @@ thead th.right { text-align: right; }
 .top-section {
   margin-top: var(--space-8);
   animation-delay: 440ms;
+}
+
+tr.loading-row td {
+  padding: var(--space-4) var(--space-5);
+  color: var(--text-tertiary);
+  font-size: 12px;
 }
 </style>
