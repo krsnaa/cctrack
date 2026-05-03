@@ -60,7 +60,12 @@
 
     <div class="sidebar-footer">
       <ConnectionStatus :status="connectionStatus" />
-      <div class="version-str">v0.1.0 · rates {{ ratesVersion || '—' }}</div>
+      <div class="version-info">
+        <span class="version-app">v0.1.0</span>
+        <span class="version-rates">
+          <span class="version-prefix">rates </span>{{ ratesVersion || '—' }}
+        </span>
+      </div>
       <button
         class="collapse-toggle"
         @click="toggleSidebar"
@@ -109,13 +114,12 @@ onMounted(load)
   width: 56px;
   min-width: 56px;
 }
-/* Hide everything that doesn't fit in 56px when collapsed. The icons stay
-   visible and tooltips on hover identify each item. */
+/* Hide what doesn't fit in 56px when collapsed. The icons + status dot stay
+   visible, "Live" label stays, version stacks vertically below. */
 .sidebar.collapsed .logo-text,
 .sidebar.collapsed .nav-label,
 .sidebar.collapsed .nav-label-text,
-.sidebar.collapsed .version-str,
-.sidebar.collapsed :deep(.connection-label) {
+.sidebar.collapsed .version-prefix {
   display: none;
 }
 .sidebar.collapsed .nav-item {
@@ -223,10 +227,27 @@ onMounted(load)
   flex-direction: column;
   gap: var(--space-3);
 }
-.version-str {
+.version-info {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
   color: var(--text-tertiary);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.version-info .version-app::after {
+  content: ' ·';
+  color: var(--text-disabled);
+  margin-left: 4px;
+}
+.sidebar.collapsed .version-info {
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  font-size: 10px;
+}
+.sidebar.collapsed .version-info .version-app::after {
+  display: none;
 }
 
 .collapse-toggle {

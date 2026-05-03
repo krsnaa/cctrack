@@ -1,7 +1,7 @@
 <template>
-  <div class="connection-status" role="status" aria-live="polite">
+  <div class="connection-status" role="status" aria-live="polite" :title="label">
     <div class="status-dot" :class="status"></div>
-    <span>{{ label }}</span>
+    <span class="connection-label">{{ label }}</span>
   </div>
 </template>
 
@@ -13,7 +13,7 @@ const props = defineProps<{ status: ConnectionStatus }>()
 
 const label = computed(() => {
   switch (props.status) {
-    case 'connected': return 'Live — watching logs'
+    case 'connected': return 'Live'
     case 'reconnecting': return 'Reconnecting…'
     case 'offline': return 'Offline'
   }
