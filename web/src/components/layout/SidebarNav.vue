@@ -60,16 +60,21 @@
 
     <div class="sidebar-footer">
       <ConnectionStatus :status="connectionStatus" />
-      <div class="version-str">v0.1.0 · rates v1.0</div>
+      <div class="version-str">v0.1.0 · rates {{ ratesVersion || '—' }}</div>
     </div>
   </aside>
 </template>
 
 <script setup lang="ts">
+import { onMounted } from 'vue'
 import type { ConnectionStatus as ConnStatus } from '../../types'
 import ConnectionStatus from './ConnectionStatus.vue'
+import { useRates } from '../../composables/useRates'
 
 defineProps<{ connectionStatus: ConnStatus }>()
+
+const { version: ratesVersion, load } = useRates()
+onMounted(load)
 </script>
 
 <style scoped>

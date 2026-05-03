@@ -41,20 +41,11 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import type { ModelRate } from '../types'
-import { fetchRates } from '../api'
+import { onMounted } from 'vue'
+import { useRates } from '../composables/useRates'
 
-const rates = ref<ModelRate[]>([])
-const version = ref('')
-const updated = ref('')
-
-onMounted(async () => {
-  const r = await fetchRates()
-  rates.value = r.rates
-  version.value = r.version
-  updated.value = r.updated
-})
+const { rates, version, updated, load } = useRates()
+onMounted(load)
 </script>
 
 <style scoped>

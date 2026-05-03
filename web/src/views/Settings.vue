@@ -48,7 +48,10 @@
         <div class="section-label">About</div>
         <div class="about-grid">
           <span>Version</span><span class="mono">v0.1.0</span>
-          <span>Rate Card</span><span class="mono">v1.0</span>
+          <span>Rate Card</span>
+          <span class="mono">
+            {{ ratesVersion || '—' }}<span v-if="ratesUpdated" class="rates-updated"> · {{ ratesUpdated }}</span>
+          </span>
         </div>
       </section>
 
@@ -64,12 +67,15 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useSettingsStore } from '../stores/settings'
+import { useRates } from '../composables/useRates'
 import Toggle from '../components/primitives/Toggle.vue'
 
 const store = useSettingsStore()
+const { version: ratesVersion, updated: ratesUpdated, load: loadRates } = useRates()
 
 onMounted(() => {
   store.load()
+  loadRates()
 })
 </script>
 
@@ -169,6 +175,9 @@ onMounted(() => {
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
   color: var(--text-tertiary);
+}
+.about-grid .rates-updated {
+  color: var(--text-disabled);
 }
 
 .actions {
