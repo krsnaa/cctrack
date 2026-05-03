@@ -2,10 +2,7 @@
   <div class="model-card">
     <div class="chart-header">
       <div class="chart-title">Spend by Model</div>
-      <div class="header-right">
-        <span class="chart-meta" v-if="totalCost > 0">{{ formatCostDisplay(totalCost) }} total</span>
-        <slot name="header-action" />
-      </div>
+      <slot name="header-action" />
     </div>
     <div class="model-bars">
       <div v-for="(group, i) in familyGroups" :key="group.family" class="model-bar-row">
@@ -24,6 +21,10 @@
           <span class="bar-sessions">{{ group.sessions }} sessions</span>
         </div>
       </div>
+    </div>
+    <div class="card-total" v-if="totalCost > 0">
+      <span class="total-label">Total</span>
+      <span class="total-value">{{ formatCostDisplay(totalCost) }}</span>
     </div>
   </div>
 </template>
@@ -97,16 +98,6 @@ function barWidth(cost: number) {
   text-transform: uppercase;
   color: var(--text-tertiary);
 }
-.header-right {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-}
-.chart-meta {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 11px;
-  color: var(--text-tertiary);
-}
 .model-bars {
   display: flex;
   flex-direction: column;
@@ -150,5 +141,26 @@ function barWidth(cost: number) {
 }
 .bar-sessions {
   color: var(--text-disabled);
+}
+.card-total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border-subtle);
+}
+.total-label {
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-tertiary);
+}
+.total-value {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
 }
 </style>
