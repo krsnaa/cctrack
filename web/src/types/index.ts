@@ -131,6 +131,7 @@ export interface Settings {
   port: number
   monthly_budget_usd: number
   open_browser_on_serve: boolean
+  claude_plan: string
 }
 
 export interface ModelRate {

@@ -246,6 +246,7 @@ func (a *API) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 		MonthlyBudgetUSD   *float64 `json:"monthly_budget_usd"`
 		OpenBrowserOnServe *bool    `json:"open_browser_on_serve"`
 		LogDir             *string  `json:"log_dir"`
+		ClaudePlan         *string  `json:"claude_plan"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		http.Error(w, "invalid JSON", 400)
@@ -260,6 +261,9 @@ func (a *API) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if updates.LogDir != nil {
 		a.cfg.LogDir = *updates.LogDir
+	}
+	if updates.ClaudePlan != nil {
+		a.cfg.ClaudePlan = *updates.ClaudePlan
 	}
 
 	if err := a.cfg.Save(); err != nil {

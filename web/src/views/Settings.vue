@@ -18,7 +18,19 @@
       </section>
 
       <section class="settings-section">
-        <div class="section-label">Budget</div>
+        <div class="section-label">Plan & Budget</div>
+        <div class="field">
+          <label>Claude Plan</label>
+          <select class="plan-select" v-model="store.draft.claude_plan">
+            <option value="">— not set —</option>
+            <option value="free">Free</option>
+            <option value="pro">Pro</option>
+            <option value="max-5x">Max (5x)</option>
+            <option value="max-20x">Max (20x)</option>
+            <option value="team">Team</option>
+            <option value="enterprise">Enterprise</option>
+          </select>
+        </div>
         <div class="field">
           <label>Monthly Budget (USD)</label>
           <div class="input-with-prefix">
@@ -134,6 +146,18 @@ onMounted(() => {
   margin: 0;
   max-width: 60ch;
 }
+.plan-select {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  max-width: 240px;
+}
+.plan-select:hover { border-color: var(--amber-500); }
+.plan-select:focus { outline: none; border-color: var(--amber-500); }
 .field {
   display: flex;
   flex-direction: column;

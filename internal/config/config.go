@@ -12,6 +12,12 @@ type Config struct {
 	Port               int     `json:"port"`
 	MonthlyBudgetUSD   float64 `json:"monthly_budget_usd"`
 	OpenBrowserOnServe bool    `json:"open_browser_on_serve"`
+	// ClaudePlan identifies the user's Anthropic plan for the dashboard's
+	// rate-limit context. Stored as a free-form string so cctrack doesn't
+	// need to track Anthropic's plan catalog as it evolves; the UI surfaces
+	// a known list (Free / Pro / Max 5x / Max 20x / Custom) but unknown
+	// values pass through.
+	ClaudePlan string `json:"claude_plan"`
 }
 
 func DefaultConfig() *Config {
@@ -22,6 +28,7 @@ func DefaultConfig() *Config {
 		Port:               7432,
 		MonthlyBudgetUSD:   0,
 		OpenBrowserOnServe: true,
+		ClaudePlan:         "",
 	}
 }
 
