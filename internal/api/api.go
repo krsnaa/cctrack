@@ -68,8 +68,9 @@ func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]any{
+		"window_5h": summary.Window5h,
 		"today":     summary.Today,
-		"week":      summary.Week,
+		"window_7d": summary.Window7d,
 		"month":     summary.Month,
 		"projected": summary.Projected,
 		"tokens": map[string]int64{

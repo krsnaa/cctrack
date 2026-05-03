@@ -42,8 +42,9 @@ var statusCmd = &cobra.Command{
 
 		fmt.Printf("cctrack v%s\n", Version)
 		fmt.Println("─────────────────────────────────────")
+		fmt.Printf("5h window      $%-8s (%s tokens)\n", fmtCost(summary.Window5h.Cost), fmtTokens(summary.Window5h.Tokens))
 		fmt.Printf("Today          $%-8s (%s tokens)\n", fmtCost(summary.Today.Cost), fmtTokens(summary.Today.Tokens))
-		fmt.Printf("This week      $%-8s (%s tokens)\n", fmtCost(summary.Week.Cost), fmtTokens(summary.Week.Tokens))
+		fmt.Printf("7d window      $%-8s (%s tokens)\n", fmtCost(summary.Window7d.Cost), fmtTokens(summary.Window7d.Tokens))
 		fmt.Printf("This month     $%-8s (%s tokens)\n", fmtCost(summary.Month.Cost), fmtTokens(summary.Month.Tokens))
 		fmt.Printf("Projected      $%s\n", fmtCost(summary.Projected))
 		fmt.Println("─────────────────────────────────────")

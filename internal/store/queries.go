@@ -8,11 +8,25 @@ import (
 )
 
 type Summary struct {
-	Hour      SpendBucket `json:"hour"`
-	Today     SpendBucket `json:"today"`
-	Week      SpendBucket `json:"week"`
-	Month     SpendBucket `json:"month"`
-	Projected float64     `json:"projected"`
+	Window5h  WindowBucket `json:"window_5h"`
+	Today     SpendBucket  `json:"today"`
+	Window7d  WindowBucket `json:"window_7d"`
+	Month     SpendBucket  `json:"month"`
+	Projected float64      `json:"projected"`
+}
+
+// WindowBucket describes a rolling usage window (5h or 7d) computed by walking
+// the request timestamp stream forward and opening a new window every time a
+// request lands at-or-after the previous window's end. Cascading windows
+// (each closes on its own clock, not on inactivity) — see GetWindowBucket.
+type WindowBucket struct {
+	Start        string  `json:"start"`         // ISO 8601 UTC
+	End          string  `json:"end"`           // ISO 8601 UTC
+	Cost         float64 `json:"cost"`          // total cost of requests in this window
+	Tokens       int64   `json:"tokens"`        // total tokens
+	RequestCount int     `json:"request_count"` // number of requests
+	PrevCost     float64 `json:"prev_cost"`     // cost of the previous window
+	PrevStart    string  `json:"prev_start"`    // ISO 8601 UTC; "" if no prev window
 }
 
 type SpendBucket struct {
@@ -27,31 +41,29 @@ type DailySpend struct {
 
 func (s *Store) GetSummary() (*Summary, error) {
 	now := time.Now()
-	hourStr := now.Format("2006-01-02 15")
 	todayStr := now.Format("2006-01-02")
-	weekAgo := now.AddDate(0, 0, -7).Format("2006-01-02")
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
 
 	summary := &Summary{}
 
-	// Current hour: aggregate from per-request timestamps rather than session
-	// last_activity. At hour-level granularity, summing a session's full
-	// lifetime cost into whichever hour it last touched would massively inflate
-	// the bucket — a 3-hour Opus session active 5 minutes ago would put its
-	// entire cost in this hour. The requests table has per-event timestamps so
-	// we attribute each request to the hour it actually happened.
-	err := s.db.QueryRow(`
-		SELECT COALESCE(SUM(cost), 0),
-		       COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_5m_tokens + cache_write_1h_tokens), 0)
-		FROM requests WHERE STRFTIME('%Y-%m-%d %H', timestamp, 'localtime') = ?`, hourStr).Scan(&summary.Hour.Cost, &summary.Hour.Tokens)
+	// Rolling 5-hour and 7-day windows from the request stream. See
+	// GetWindowBucket for the cascading-window algorithm; each window closes on
+	// its own clock, not on inactivity, so a continuously-active user has back-
+	// to-back windows.
+	w5, err := s.GetWindowBucket(5 * time.Hour)
 	if err != nil {
 		return nil, err
 	}
+	summary.Window5h = w5
+	w7, err := s.GetWindowBucket(7 * 24 * time.Hour)
+	if err != nil {
+		return nil, err
+	}
+	summary.Window7d = w7
 
 	// last_activity is stored as a UTC ISO timestamp from the JSONL log; the
-	// 'localtime' modifier converts to the host's local zone so "today" / "this
-	// week" / "this month" buckets reflect the user's calendar, not UTC's.
-	// Today
+	// 'localtime' modifier converts to the host's local zone so "today" /
+	// "this month" buckets reflect the user's calendar, not UTC's.
 	err = s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0),
 		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h), 0)
@@ -60,16 +72,6 @@ func (s *Store) GetSummary() (*Summary, error) {
 		return nil, err
 	}
 
-	// This week
-	err = s.db.QueryRow(`
-		SELECT COALESCE(SUM(total_cost), 0),
-		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h), 0)
-		FROM sessions WHERE DATE(last_activity, 'localtime') >= ?`, weekAgo).Scan(&summary.Week.Cost, &summary.Week.Tokens)
-	if err != nil {
-		return nil, err
-	}
-
-	// This month
 	err = s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0),
 		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h), 0)
@@ -86,6 +88,73 @@ func (s *Store) GetSummary() (*Summary, error) {
 	}
 
 	return summary, nil
+}
+
+// GetWindowBucket walks the request timestamps in order, opens a new rolling
+// window of `duration` when a request arrives at-or-after the previous
+// window's end, and returns the most-recent window's totals plus the prior
+// window's cost (for trend comparisons).
+func (s *Store) GetWindowBucket(duration time.Duration) (WindowBucket, error) {
+	rows, err := s.db.Query(`
+		SELECT timestamp, cost,
+			input_tokens + output_tokens + cache_read_tokens
+				+ cache_write_5m_tokens + cache_write_1h_tokens
+		FROM requests ORDER BY timestamp ASC`)
+	if err != nil {
+		return WindowBucket{}, err
+	}
+	defer rows.Close()
+
+	type win struct {
+		start  time.Time
+		cost   float64
+		tokens int64
+		count  int
+	}
+	var windows []win
+	var currentEnd time.Time
+
+	for rows.Next() {
+		var tsStr string
+		var cost float64
+		var tokens int64
+		if err := rows.Scan(&tsStr, &cost, &tokens); err != nil {
+			return WindowBucket{}, err
+		}
+		ts, err := time.Parse(time.RFC3339Nano, tsStr)
+		if err != nil {
+			ts, err = time.Parse(time.RFC3339, tsStr)
+			if err != nil {
+				continue
+			}
+		}
+		if currentEnd.IsZero() || !ts.Before(currentEnd) {
+			windows = append(windows, win{start: ts})
+			currentEnd = ts.Add(duration)
+		}
+		w := &windows[len(windows)-1]
+		w.cost += cost
+		w.tokens += tokens
+		w.count++
+	}
+
+	if len(windows) == 0 {
+		return WindowBucket{}, nil
+	}
+	cur := windows[len(windows)-1]
+	out := WindowBucket{
+		Start:        cur.start.UTC().Format(time.RFC3339Nano),
+		End:          cur.start.Add(duration).UTC().Format(time.RFC3339Nano),
+		Cost:         cur.cost,
+		Tokens:       cur.tokens,
+		RequestCount: cur.count,
+	}
+	if len(windows) >= 2 {
+		prev := windows[len(windows)-2]
+		out.PrevCost = prev.cost
+		out.PrevStart = prev.start.UTC().Format(time.RFC3339Nano)
+	}
+	return out, nil
 }
 
 func (s *Store) GetDailySummary(days int) ([]DailySpend, error) {
@@ -477,32 +546,19 @@ func (s *Store) GetActivityHeatmap() ([]HeatmapCell, error) {
 // --- Feature: Cost Velocity / Trend Comparison ---
 
 type Trends struct {
-	PrevHourCost  float64 `json:"prev_hour_cost"`
 	PrevDayCost   float64 `json:"prev_day_cost"`
-	PrevWeekCost  float64 `json:"prev_week_cost"`
 	PrevMonthCost float64 `json:"prev_month_cost"`
 }
 
 func (s *Store) GetTrends() (*Trends, error) {
 	now := time.Now()
-	prevHourStr := now.Add(-time.Hour).Format("2006-01-02 15")
 	todayStr := now.Format("2006-01-02")
 	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
-
-	twoWeeksAgo := now.AddDate(0, 0, -14).Format("2006-01-02")
-	oneWeekAgo := now.AddDate(0, 0, -7).Format("2006-01-02")
 
 	prevMonthStart := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
 	prevMonthEnd := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
 
 	t := &Trends{}
-
-	// Previous hour cost — same per-request semantic as the Hour bucket so the
-	// comparison is honest at hour granularity.
-	s.db.QueryRow(`
-		SELECT COALESCE(SUM(cost), 0)
-		FROM requests WHERE STRFTIME('%Y-%m-%d %H', timestamp, 'localtime') = ?`,
-		prevHourStr).Scan(&t.PrevHourCost)
 
 	// Previous day cost (yesterday) — local-day buckets so "yesterday" matches
 	// the user's calendar regardless of where UTC midnight falls.
@@ -511,13 +567,6 @@ func (s *Store) GetTrends() (*Trends, error) {
 		FROM sessions WHERE DATE(last_activity, 'localtime') >= ?
 			AND DATE(last_activity, 'localtime') < ?`,
 		yesterday, todayStr).Scan(&t.PrevDayCost)
-
-	// Previous week cost (7-14 days ago)
-	s.db.QueryRow(`
-		SELECT COALESCE(SUM(total_cost), 0)
-		FROM sessions WHERE DATE(last_activity, 'localtime') >= ?
-			AND DATE(last_activity, 'localtime') < ?`,
-		twoWeeksAgo, oneWeekAgo).Scan(&t.PrevWeekCost)
 
 	// Previous month cost
 	s.db.QueryRow(`
