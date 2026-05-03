@@ -37,7 +37,11 @@ const chartData = computed(() => {
 
   const labels = props.data.map((d, i) => {
     if (i === props.data.length - 1) return 'Today'
-    const date = new Date(d.date)
+    // d.date is "YYYY-MM-DD" representing a local calendar day. `new Date(s)`
+    // parses bare dates as UTC midnight, which then renders as the previous
+    // day in any timezone west of UTC. Append T00:00:00 to force local-zone
+    // parsing so the label matches what the backend bucketed.
+    const date = new Date(d.date + 'T00:00:00')
     return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
   })
 

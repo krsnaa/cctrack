@@ -31,11 +31,14 @@ func (s *Store) GetSummary() (*Summary, error) {
 
 	summary := &Summary{}
 
+	// last_activity is stored as a UTC ISO timestamp from the JSONL log; the
+	// 'localtime' modifier converts to the host's local zone so "today" / "this
+	// week" / "this month" buckets reflect the user's calendar, not UTC's.
 	// Today
 	err := s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0),
 		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h), 0)
-		FROM sessions WHERE last_activity >= ?`, todayStr).Scan(&summary.Today.Cost, &summary.Today.Tokens)
+		FROM sessions WHERE DATE(last_activity, 'localtime') >= ?`, todayStr).Scan(&summary.Today.Cost, &summary.Today.Tokens)
 	if err != nil {
 		return nil, err
 	}
@@ -44,7 +47,7 @@ func (s *Store) GetSummary() (*Summary, error) {
 	err = s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0),
 		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h), 0)
-		FROM sessions WHERE last_activity >= ?`, weekAgo).Scan(&summary.Week.Cost, &summary.Week.Tokens)
+		FROM sessions WHERE DATE(last_activity, 'localtime') >= ?`, weekAgo).Scan(&summary.Week.Cost, &summary.Week.Tokens)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +56,7 @@ func (s *Store) GetSummary() (*Summary, error) {
 	err = s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0),
 		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h), 0)
-		FROM sessions WHERE last_activity >= ?`, monthStart).Scan(&summary.Month.Cost, &summary.Month.Tokens)
+		FROM sessions WHERE DATE(last_activity, 'localtime') >= ?`, monthStart).Scan(&summary.Month.Cost, &summary.Month.Tokens)
 	if err != nil {
 		return nil, err
 	}
@@ -72,9 +75,9 @@ func (s *Store) GetDailySummary(days int) ([]DailySpend, error) {
 	since := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
 
 	rows, err := s.db.Query(`
-		SELECT DATE(last_activity) as day, SUM(total_cost)
+		SELECT DATE(last_activity, 'localtime') as day, SUM(total_cost)
 		FROM sessions
-		WHERE last_activity >= ?
+		WHERE DATE(last_activity, 'localtime') >= ?
 		GROUP BY day
 		ORDER BY day ASC`, since)
 	if err != nil {
@@ -207,10 +210,10 @@ func (s *Store) GetProjects() ([]ProjectSummary, error) {
 func (s *Store) GetProjectMonthly() ([]ProjectMonthly, error) {
 	rows, err := s.db.Query(`
 		SELECT project,
-			STRFTIME('%Y-%m', last_activity) as month,
+			STRFTIME('%Y-%m', last_activity, 'localtime') as month,
 			SUM(total_cost) as cost
 		FROM sessions
-		WHERE last_activity >= DATE('now', '-6 months')
+		WHERE DATE(last_activity, 'localtime') >= DATE('now', '-6 months', 'localtime')
 		GROUP BY project, month
 		ORDER BY month ASC, cost DESC`)
 	if err != nil {
@@ -326,7 +329,7 @@ type HeatmapCell struct {
 
 func (s *Store) GetActivityHeatmap() ([]HeatmapCell, error) {
 	rows, err := s.db.Query(`
-		SELECT CAST(STRFTIME('%w', last_activity) AS INTEGER) as dow,
+		SELECT CAST(STRFTIME('%w', last_activity, 'localtime') AS INTEGER) as dow,
 			CAST(STRFTIME('%H', last_activity, 'localtime') AS INTEGER) as hour,
 			SUM(total_cost) as cost
 		FROM sessions
@@ -370,22 +373,26 @@ func (s *Store) GetTrends() (*Trends, error) {
 
 	t := &Trends{}
 
-	// Previous day cost (yesterday)
+	// Previous day cost (yesterday) — local-day buckets so "yesterday" matches
+	// the user's calendar regardless of where UTC midnight falls.
 	s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0)
-		FROM sessions WHERE DATE(last_activity) >= ? AND DATE(last_activity) < ?`,
+		FROM sessions WHERE DATE(last_activity, 'localtime') >= ?
+			AND DATE(last_activity, 'localtime') < ?`,
 		yesterday, todayStr).Scan(&t.PrevDayCost)
 
 	// Previous week cost (7-14 days ago)
 	s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0)
-		FROM sessions WHERE last_activity >= ? AND last_activity < ?`,
+		FROM sessions WHERE DATE(last_activity, 'localtime') >= ?
+			AND DATE(last_activity, 'localtime') < ?`,
 		twoWeeksAgo, oneWeekAgo).Scan(&t.PrevWeekCost)
 
 	// Previous month cost
 	s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0)
-		FROM sessions WHERE last_activity >= ? AND last_activity < ?`,
+		FROM sessions WHERE DATE(last_activity, 'localtime') >= ?
+			AND DATE(last_activity, 'localtime') < ?`,
 		prevMonthStart, prevMonthEnd).Scan(&t.PrevMonthCost)
 
 	return t, nil
