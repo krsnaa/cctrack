@@ -11,6 +11,9 @@
         :value="store.summary.hour?.cost ?? 0"
         :tokens="store.summary.hour?.tokens ?? 0"
         :highlight="true"
+        :trendPct="hourTrend"
+        :prevName="prevHourLabel"
+        :prevAmount="store.summary.trends?.prev_hour_cost"
       />
       <StatCard
         :label="todayLabel"
@@ -165,6 +168,11 @@ function trendPct(current: number, previous: number): number | null {
   return Math.round(((current - previous) / previous) * 100)
 }
 
+const hourTrend = computed(() => {
+  if (!store.summary?.trends) return null
+  return trendPct(store.summary.hour?.cost ?? 0, store.summary.trends.prev_hour_cost)
+})
+
 const dayTrend = computed(() => {
   if (!store.summary?.trends) return null
   return trendPct(store.summary.today.cost, store.summary.trends.prev_day_cost)
@@ -222,6 +230,12 @@ const weekLabel = computed(() => `Week ${isoWeek(new Date())}`)
 const hourLabel = computed(() => {
   const h = new Date().getHours()
   return h.toString().padStart(2, '0') + ':00'
+})
+
+const prevHourLabel = computed(() => {
+  const d = new Date()
+  d.setHours(d.getHours() - 1)
+  return d.getHours().toString().padStart(2, '0') + ':00'
 })
 
 // Slices for the two Overview donuts.

@@ -477,13 +477,15 @@ func (s *Store) GetActivityHeatmap() ([]HeatmapCell, error) {
 // --- Feature: Cost Velocity / Trend Comparison ---
 
 type Trends struct {
-	PrevDayCost  float64 `json:"prev_day_cost"`
-	PrevWeekCost float64 `json:"prev_week_cost"`
+	PrevHourCost  float64 `json:"prev_hour_cost"`
+	PrevDayCost   float64 `json:"prev_day_cost"`
+	PrevWeekCost  float64 `json:"prev_week_cost"`
 	PrevMonthCost float64 `json:"prev_month_cost"`
 }
 
 func (s *Store) GetTrends() (*Trends, error) {
 	now := time.Now()
+	prevHourStr := now.Add(-time.Hour).Format("2006-01-02 15")
 	todayStr := now.Format("2006-01-02")
 	yesterday := now.AddDate(0, 0, -1).Format("2006-01-02")
 
@@ -494,6 +496,13 @@ func (s *Store) GetTrends() (*Trends, error) {
 	prevMonthEnd := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
 
 	t := &Trends{}
+
+	// Previous hour cost — same per-request semantic as the Hour bucket so the
+	// comparison is honest at hour granularity.
+	s.db.QueryRow(`
+		SELECT COALESCE(SUM(cost), 0)
+		FROM requests WHERE STRFTIME('%Y-%m-%d %H', timestamp, 'localtime') = ?`,
+		prevHourStr).Scan(&t.PrevHourCost)
 
 	// Previous day cost (yesterday) — local-day buckets so "yesterday" matches
 	// the user's calendar regardless of where UTC midnight falls.

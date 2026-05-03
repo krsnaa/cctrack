@@ -11,6 +11,7 @@ export interface CostBreakdown {
 }
 
 export interface Trends {
+  prev_hour_cost: number
   prev_day_cost: number
   prev_week_cost: number
   prev_month_cost: number
