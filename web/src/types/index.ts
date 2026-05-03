@@ -17,6 +17,7 @@ export interface Trends {
 }
 
 export interface Summary {
+  hour: SpendBucket
   today: SpendBucket
   week: SpendBucket
   month: SpendBucket

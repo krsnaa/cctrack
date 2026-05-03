@@ -8,6 +8,7 @@ import (
 )
 
 type Summary struct {
+	Hour      SpendBucket `json:"hour"`
 	Today     SpendBucket `json:"today"`
 	Week      SpendBucket `json:"week"`
 	Month     SpendBucket `json:"month"`
@@ -26,17 +27,32 @@ type DailySpend struct {
 
 func (s *Store) GetSummary() (*Summary, error) {
 	now := time.Now()
+	hourStr := now.Format("2006-01-02 15")
 	todayStr := now.Format("2006-01-02")
 	weekAgo := now.AddDate(0, 0, -7).Format("2006-01-02")
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
 
 	summary := &Summary{}
 
+	// Current hour: aggregate from per-request timestamps rather than session
+	// last_activity. At hour-level granularity, summing a session's full
+	// lifetime cost into whichever hour it last touched would massively inflate
+	// the bucket — a 3-hour Opus session active 5 minutes ago would put its
+	// entire cost in this hour. The requests table has per-event timestamps so
+	// we attribute each request to the hour it actually happened.
+	err := s.db.QueryRow(`
+		SELECT COALESCE(SUM(cost), 0),
+		       COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_5m_tokens + cache_write_1h_tokens), 0)
+		FROM requests WHERE STRFTIME('%Y-%m-%d %H', timestamp, 'localtime') = ?`, hourStr).Scan(&summary.Hour.Cost, &summary.Hour.Tokens)
+	if err != nil {
+		return nil, err
+	}
+
 	// last_activity is stored as a UTC ISO timestamp from the JSONL log; the
 	// 'localtime' modifier converts to the host's local zone so "today" / "this
 	// week" / "this month" buckets reflect the user's calendar, not UTC's.
 	// Today
-	err := s.db.QueryRow(`
+	err = s.db.QueryRow(`
 		SELECT COALESCE(SUM(total_cost), 0),
 		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h), 0)
 		FROM sessions WHERE DATE(last_activity, 'localtime') >= ?`, todayStr).Scan(&summary.Today.Cost, &summary.Today.Tokens)

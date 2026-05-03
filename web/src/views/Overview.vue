@@ -7,6 +7,12 @@
 
     <div class="stat-grid" v-if="store.summary">
       <StatCard
+        :label="hourLabel"
+        :value="store.summary.hour?.cost ?? 0"
+        :tokens="store.summary.hour?.tokens ?? 0"
+        subtext="current hour"
+      />
+      <StatCard
         :label="todayLabel"
         :value="store.summary.today.cost"
         :tokens="store.summary.today.tokens"
@@ -32,27 +38,28 @@
         :prevName="prevMonthName"
         :prevAmount="store.summary.trends?.prev_month_cost"
       />
+    </div>
+
+    <div class="charts-row" v-if="store.summary">
+      <DailySpendChart />
       <StatCard
+        class="projected-slot"
         label="Projected"
         :value="store.summary.projected"
         subtext="est. this month"
       />
     </div>
 
-    <div class="charts-row" v-if="store.summary">
-      <DailySpendChart />
+    <!-- Model Breakdown + Cost Breakdown + Heatmap row -->
+    <div class="insights-row" v-if="models.length || heatmap.length">
+      <ModelBreakdown :models="models" />
       <TokenDonut
-        v-if="store.summary.cost_breakdown"
+        v-if="store.summary?.cost_breakdown"
         :inputCost="store.summary.cost_breakdown.input_cost"
         :outputCost="store.summary.cost_breakdown.output_cost"
         :cacheReadCost="store.summary.cost_breakdown.cache_read_cost"
         :cacheWriteCost="store.summary.cost_breakdown.cache_write_cost"
       />
-    </div>
-
-    <!-- Model Breakdown + Heatmap row -->
-    <div class="insights-row" v-if="models.length || heatmap.length">
-      <ModelBreakdown :models="models" />
       <ActivityHeatmap :cells="heatmap" />
     </div>
 
@@ -197,6 +204,11 @@ function isoWeek(d: Date): number {
 
 const weekLabel = computed(() => `Week ${isoWeek(new Date())}`)
 
+const hourLabel = computed(() => {
+  const h = new Date().getHours()
+  return h.toString().padStart(2, '0') + ':00'
+})
+
 const yesterdayLabel = computed(() => {
   const d = new Date()
   d.setDate(d.getDate() - 1)
@@ -255,11 +267,20 @@ onMounted(async () => {
   grid-template-columns: 1fr 300px;
   gap: var(--space-5);
   margin-bottom: var(--space-8);
+  align-items: stretch;
+}
+/* The Projected card sits in the right slot of charts-row where the donut
+   used to live. Stretching its background to match DailySpendChart's height
+   keeps the visual rhythm of the row. */
+.charts-row .projected-slot {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .insights-row {
   display: grid;
-  grid-template-columns: 340px 1fr;
+  grid-template-columns: 340px 300px 1fr;
   gap: var(--space-5);
   margin-bottom: var(--space-8);
 }
