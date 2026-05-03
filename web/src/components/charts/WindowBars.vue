@@ -4,9 +4,9 @@
       <div class="window-bar-head">
         <span class="window-bar-title">{{ w.title }}</span>
         <span class="window-bar-meta">
-          <span class="time-pct">{{ w.timePct.toFixed(1) }}%</span>
+          <span v-if="w.hasDenom" class="usage-pct">{{ w.usagePct.toFixed(1) }}%</span>
           <template v-if="w.paceText">
-            <span class="sep">·</span>
+            <span v-if="w.hasDenom" class="sep">·</span>
             <span :class="['pace', w.paceClass]">{{ w.paceText }}</span>
           </template>
           <span class="sep">·</span>
@@ -81,6 +81,7 @@ interface Bar {
   timePct: number
   usagePct: number   // actual ratio (can exceed 100%)
   usageWidth: number // clamped 0-100 for rendering
+  hasDenom: boolean  // true when cap or prev_cost give us a real denominator
   paceText: string
   paceClass: string  // 'over', 'under', or '' for neutral / no-pace
   remaining: string
@@ -146,7 +147,7 @@ function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): 
 
   if (denom <= 0) {
     return {
-      title, timePct, usagePct: 0, usageWidth: 0,
+      title, timePct, usagePct: 0, usageWidth: 0, hasDenom: false,
       paceText: 'sync to enable', paceClass: '',
       remaining, resetsAt, tooltip, syncedLabel, syncStale,
     }
@@ -160,7 +161,7 @@ function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): 
   const paceClass = delta > 5 ? 'over' : delta < -5 ? 'under' : ''
   const paceText = `${sign}${Math.round(delta)}% pace`
   return {
-    title, timePct, usagePct, usageWidth, paceText, paceClass,
+    title, timePct, usagePct, usageWidth, hasDenom: true, paceText, paceClass,
     remaining, resetsAt, tooltip, syncedLabel, syncStale,
   }
 }
@@ -212,7 +213,7 @@ const bars = computed(() => {
 .window-bar-meta .sep {
   color: var(--text-disabled);
 }
-.window-bar-meta .time-pct { color: var(--text-primary); }
+.window-bar-meta .usage-pct { color: var(--text-primary); }
 .window-bar-meta .pace.over { color: var(--cost-high); }
 .window-bar-meta .pace.under { color: #4ade80; }
 .window-bar-meta .pace { color: var(--text-tertiary); }
