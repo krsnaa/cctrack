@@ -12,14 +12,16 @@
     </div>
 
     <div class="ws-fields">
-      <div class="ws-field">
+      <!-- 5h: time-left in h/m. 7d: pick reset weekday + HH:MM (more natural
+           given Anthropic's "Resets Tue 03:00" UI affordance). -->
+      <div class="ws-field" v-if="windowType === '5h'">
         <label>Time left</label>
         <div class="ws-duo">
           <input
             type="number"
             v-model.number="hours"
             min="0"
-            :max="windowType === '5h' ? 4 : 6"
+            max="4"
             placeholder="h"
             aria-label="Hours"
           />
@@ -32,17 +34,29 @@
             placeholder="m"
             aria-label="Minutes"
           />
-          <span v-if="windowType === '7d'" class="sep">m  ·  </span>
+          <span class="sep">m</span>
+        </div>
+      </div>
+
+      <div class="ws-field" v-else>
+        <label>Resets on</label>
+        <div class="ws-duo">
+          <select v-model.number="weekday" class="ws-select" aria-label="Weekday">
+            <option :value="0">Sun</option>
+            <option :value="1">Mon</option>
+            <option :value="2">Tue</option>
+            <option :value="3">Wed</option>
+            <option :value="4">Thu</option>
+            <option :value="5">Fri</option>
+            <option :value="6">Sat</option>
+          </select>
+          <span class="sep">@</span>
           <input
-            v-if="windowType === '7d'"
-            type="number"
-            v-model.number="days"
-            min="0"
-            max="6"
-            placeholder="d"
-            aria-label="Days"
+            type="time"
+            v-model="resetTime"
+            class="ws-time"
+            aria-label="Reset time"
           />
-          <span v-if="windowType === '7d'" class="sep">d</span>
         </div>
       </div>
 
@@ -77,10 +91,23 @@ import type { WindowAnchor } from '../../types'
 
 const props = defineProps<{ windowType: '5h' | '7d' }>()
 
-const days = ref<number | null>(null)
+// 5h fields
 const hours = ref<number | null>(null)
 const minutes = ref<number | null>(null)
+
+// 7d fields — weekday (0=Sun..6=Sat) and clock time HH:MM, used to compute
+// the next future occurrence. Default to "now" so the user starts from a
+// sensible value and adjusts.
+const weekday = ref<number>(new Date().getDay())
+const resetTime = ref<string>(formatHM(new Date()))
+
 const pct = ref<number | null>(null)
+
+function formatHM(d: Date): string {
+  const h = d.getHours().toString().padStart(2, '0')
+  const m = d.getMinutes().toString().padStart(2, '0')
+  return `${h}:${m}`
+}
 
 const latest = ref<WindowAnchor | null>(null)
 const submitting = ref(false)
@@ -90,10 +117,26 @@ const statusClass = ref<'ok' | 'err' | ''>('')
 const title = computed(() => (props.windowType === '5h' ? '5h Window' : '7d Window'))
 
 const totalMinutes = computed(() => {
-  const d = days.value ?? 0
-  const h = hours.value ?? 0
-  const m = minutes.value ?? 0
-  return d * 24 * 60 + h * 60 + m
+  if (props.windowType === '5h') {
+    const h = hours.value ?? 0
+    const m = minutes.value ?? 0
+    return h * 60 + m
+  }
+  // 7d: derive minutes-until from chosen weekday + HH:MM, picking the next
+  // future occurrence. If the chosen moment is today but already past, roll
+  // forward 7 days.
+  if (!resetTime.value) return 0
+  const [hh, mm] = resetTime.value.split(':').map(Number)
+  if (Number.isNaN(hh) || Number.isNaN(mm)) return 0
+  const now = new Date()
+  const target = new Date(now)
+  const daysAhead = (weekday.value - now.getDay() + 7) % 7
+  target.setDate(now.getDate() + daysAhead)
+  target.setHours(hh, mm, 0, 0)
+  if (target.getTime() <= now.getTime()) {
+    target.setDate(target.getDate() + 7)
+  }
+  return Math.floor((target.getTime() - now.getTime()) / 60000)
 })
 
 const canSubmit = computed(() => totalMinutes.value > 0)
@@ -120,10 +163,12 @@ async function submit() {
     status.value = 'Anchor saved. Window bars will reflect this on next refresh.'
     statusClass.value = 'ok'
     await loadLatest()
-    days.value = null
     hours.value = null
     minutes.value = null
     pct.value = null
+    // Re-default 7d weekday/time to "now" for the next sync cycle.
+    weekday.value = new Date().getDay()
+    resetTime.value = formatHM(new Date())
   } catch (e: any) {
     status.value = `Sync failed: ${e?.message ?? 'unknown error'}`
     statusClass.value = 'err'
@@ -217,6 +262,19 @@ onMounted(loadLatest)
   font-size: 12px;
   color: var(--text-tertiary);
 }
+.ws-select,
+.ws-time {
+  background: var(--bg-base);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  padding: 6px 8px;
+}
+.ws-select:hover,
+.ws-time:hover { border-color: var(--amber-500); }
+.ws-select:focus,
+.ws-time:focus { outline: none; border-color: var(--amber-500); }
 .input-with-suffix {
   display: flex;
   align-items: center;
