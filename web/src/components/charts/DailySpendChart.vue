@@ -1,7 +1,7 @@
 <template>
   <div class="chart-card">
     <div class="chart-header">
-      <div class="chart-title">Daily Spend — Last 30 Days</div>
+      <div class="chart-title">Daily Spend — Last 90 Days</div>
       <div class="chart-meta">{{ totalStr }} total</div>
     </div>
     <div class="chart-canvas-wrap">

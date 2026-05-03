@@ -13,7 +13,7 @@ export const useDashboardStore = defineStore('dashboard', () => {
   async function load() {
     const [s, d, recent, top] = await Promise.all([
       fetchSummary(),
-      fetchDaily(30),
+      fetchDaily(90),
       fetchRecent(10),
       fetchSessions(5, 0, 'cost', 'desc'),
     ])
