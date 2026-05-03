@@ -37,7 +37,8 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/settings", a.handlePostSettings)
 	mux.HandleFunc("GET /api/v1/projects", a.handleProjects)
 	mux.HandleFunc("GET /api/v1/projects/monthly", a.handleProjectMonthly)
-	mux.HandleFunc("GET /api/v1/projects/prev-month", a.handleProjectsPrevMonth)
+	mux.HandleFunc("GET /api/v1/projects/spend", a.handleProjectsSpend)
+	mux.HandleFunc("GET /api/v1/cost-breakdown", a.handleCostBreakdown)
 	mux.HandleFunc("GET /api/v1/rates", a.handleRates)
 	mux.HandleFunc("GET /api/v1/models", a.handleModels)
 	mux.HandleFunc("GET /api/v1/heatmap", a.handleHeatmap)
@@ -53,12 +54,6 @@ func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	input, output, cacheRead, cacheWrite, err := a.store.GetTokenBreakdown()
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-
-	costBreakdown, err := a.store.GetCostBreakdown()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -82,7 +77,6 @@ func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
 			"cache_read":  cacheRead,
 			"cache_write": cacheWrite,
 		},
-		"cost_breakdown": costBreakdown,
 		"trends":         trends,
 		"budget":         a.cfg.MonthlyBudgetUSD,
 	}
@@ -298,8 +292,27 @@ func (a *API) handleProjectMonthly(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, data)
 }
 
-func (a *API) handleProjectsPrevMonth(w http.ResponseWriter, r *http.Request) {
-	data, err := a.store.GetProjectsPrevMonth()
+func (a *API) handleProjectsSpend(w http.ResponseWriter, r *http.Request) {
+	bounds, err := store.ParseRange(r.URL.Query().Get("range"))
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	data, err := a.store.GetProjectsSpendInRange(bounds)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, data)
+}
+
+func (a *API) handleCostBreakdown(w http.ResponseWriter, r *http.Request) {
+	bounds, err := store.ParseRange(r.URL.Query().Get("range"))
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	data, err := a.store.GetCostBreakdownInRange(bounds)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -316,7 +329,12 @@ func (a *API) handleRates(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *API) handleModels(w http.ResponseWriter, r *http.Request) {
-	models, err := a.store.GetModelBreakdown()
+	bounds, err := store.ParseRange(r.URL.Query().Get("range"))
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	models, err := a.store.GetModelBreakdownInRange(bounds)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return

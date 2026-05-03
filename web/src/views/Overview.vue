@@ -58,20 +58,32 @@
       />
     </div>
 
-    <!-- Model breakdown + two donuts (cost-by-type, project-by-prev-month) -->
+    <!-- Model breakdown + two donuts (cost-by-type, projects-by-spend) -->
     <div class="insights-row" v-if="models.length || costBreakdownSlices.length">
-      <ModelBreakdown :models="models" />
+      <ModelBreakdown :models="models">
+        <template #header-action>
+          <TimeRangeSelect v-model="modelsRange" />
+        </template>
+      </ModelBreakdown>
       <Donut
         title="Cost Breakdown"
-        subtitle="all time · by token type"
+        :subtitle="rangeLabel(costRange) + ' · by token type'"
         :slices="costBreakdownSlices"
-      />
+      >
+        <template #header-action>
+          <TimeRangeSelect v-model="costRange" />
+        </template>
+      </Donut>
       <Donut
         title="Spend by Project"
-        :subtitle="prevMonthLabel + ' · top projects'"
-        :slices="prevMonthProjectSlices"
-        emptyText="No spend last month"
-      />
+        :subtitle="rangeLabel(projectsRange) + ' · top projects'"
+        :slices="projectSpendSlices"
+        emptyText="No spend in this range"
+      >
+        <template #header-action>
+          <TimeRangeSelect v-model="projectsRange" />
+        </template>
+      </Donut>
     </div>
 
     <!-- Activity heatmap on its own row so the wider canvas reads clearly -->
@@ -141,7 +153,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { useDashboardStore } from '../stores/dashboard'
 import StatCard from '../components/primitives/StatCard.vue'
 import DailySpendChart from '../components/charts/DailySpendChart.vue'
@@ -152,14 +164,33 @@ import WindowBars from '../components/charts/WindowBars.vue'
 import SessionRow from '../components/domain/SessionRow.vue'
 import SessionDetail from '../components/domain/SessionDetail.vue'
 import SlideOver from '../components/primitives/SlideOver.vue'
-import type { Session, ModelSummary, HeatmapCell, ProjectMonthly } from '../types'
-import { fetchSession, fetchModels, fetchHeatmap, fetchProjectsPrevMonth } from '../api'
+import TimeRangeSelect, { type TimeRange } from '../components/primitives/TimeRangeSelect.vue'
+import type { Session, ModelSummary, HeatmapCell, ProjectMonthly, CostBreakdown } from '../types'
+import { fetchSession, fetchModels, fetchHeatmap, fetchProjectsSpend, fetchCostBreakdown } from '../api'
 
 const store = useDashboardStore()
 const selectedSession = ref<Session | null>(null)
 const models = ref<ModelSummary[]>([])
 const heatmap = ref<HeatmapCell[]>([])
-const prevMonthProjects = ref<ProjectMonthly[]>([])
+const projectSpend = ref<ProjectMonthly[]>([])
+const costBreakdown = ref<CostBreakdown | null>(null)
+
+// Per-card time range — independent so the user can ask different
+// questions of each chart without one resetting the others.
+const modelsRange = ref<TimeRange>('30d')
+const costRange = ref<TimeRange>('30d')
+const projectsRange = ref<TimeRange>('30d')
+
+const RANGE_LABELS: Record<TimeRange, string> = {
+  '7d': 'Last 7 days',
+  '30d': 'Last 30 days',
+  'mtd': 'This month',
+  'last_month': 'Last month',
+  'all': 'All time',
+}
+function rangeLabel(r: TimeRange): string {
+  return RANGE_LABELS[r] ?? r
+}
 
 const currentDate = computed(() => {
   const d = new Date()
@@ -221,7 +252,7 @@ const monthLabel = computed(() =>
 
 // Slices for the two Overview donuts.
 const costBreakdownSlices = computed(() => {
-  const cb = store.summary?.cost_breakdown
+  const cb = costBreakdown.value
   if (!cb) return []
   return [
     { label: 'Input', value: cb.input_cost, color: '#f59e0b' },
@@ -245,8 +276,8 @@ function truncateMid(name: string, max = 36): string {
   return `${name.slice(0, head)}…${name.slice(name.length - tail)}`
 }
 
-const prevMonthProjectSlices = computed(() =>
-  prevMonthProjects.value.slice(0, 8).map((p, i) => ({
+const projectSpendSlices = computed(() =>
+  projectSpend.value.slice(0, 8).map((p, i) => ({
     label: truncateMid(p.project || '(no project)'),
     value: p.cost,
     color: projectColors[i % projectColors.length],
@@ -263,16 +294,30 @@ async function openSession(id: string) {
   selectedSession.value = await fetchSession(id)
 }
 
-onMounted(async () => {
+async function loadModels() {
+  models.value = (await fetchModels(modelsRange.value)) || []
+}
+async function loadCostBreakdown() {
+  costBreakdown.value = await fetchCostBreakdown(costRange.value)
+}
+async function loadProjectSpend() {
+  projectSpend.value = (await fetchProjectsSpend(projectsRange.value)) || []
+}
+
+// Refetch each card independently when its own range changes — the others
+// don't need to re-render, so isolating the watchers avoids redundant
+// network requests.
+watch(modelsRange, loadModels)
+watch(costRange, loadCostBreakdown)
+watch(projectsRange, loadProjectSpend)
+
+async function loadHeatmap() {
+  heatmap.value = (await fetchHeatmap()) || []
+}
+
+onMounted(() => {
   if (!store.loaded) store.load()
-  const [m, h, p] = await Promise.all([
-    fetchModels(),
-    fetchHeatmap(),
-    fetchProjectsPrevMonth(),
-  ])
-  models.value = m || []
-  heatmap.value = h || []
-  prevMonthProjects.value = p || []
+  Promise.all([loadModels(), loadCostBreakdown(), loadProjectSpend(), loadHeatmap()])
 })
 </script>
 

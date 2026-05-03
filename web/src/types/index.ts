@@ -49,7 +49,6 @@ export interface Summary {
     cache_read: number
     cache_write: number
   }
-  cost_breakdown: CostBreakdown
   trends: Trends
   budget: number
 }

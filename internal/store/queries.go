@@ -476,28 +476,34 @@ func (s *Store) GetProjects() ([]ProjectSummary, error) {
 	return projects, nil
 }
 
-// GetProjectsPrevMonth returns spend per project for the previous full local
-// calendar month, descending by cost. Drives the "Spend by Project · last
-// month" donut on the Overview.
+// GetProjectsSpendInRange returns spend per project over [bounds.Start,
+// bounds.End), descending by cost. Drives the "Spend by Project" donut on
+// the Overview with whichever range the user picks.
 //
 // Joins requests → sessions so we attribute each request's cost to the day
-// it was actually incurred (per-request timestamp), while still grouping by
-// the project that owns the parent session.
-func (s *Store) GetProjectsPrevMonth() ([]ProjectMonthly, error) {
-	now := time.Now()
-	prevMonthStart := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
-	thisMonthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
-	monthLabel := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, now.Location()).Format("2006-01")
+// it was actually incurred (per-request timestamp), while grouping by the
+// project that owns the parent session. A zero Start means no lower bound
+// (all-time).
+func (s *Store) GetProjectsSpendInRange(bounds TimeBounds) ([]ProjectMonthly, error) {
+	where := "1=1"
+	args := []any{}
+	if !bounds.Start.IsZero() {
+		where += " AND r.timestamp >= ?"
+		args = append(args, bounds.Start.UTC().Format(time.RFC3339Nano))
+	}
+	where += " AND r.timestamp < ?"
+	args = append(args, bounds.End.UTC().Format(time.RFC3339Nano))
 
-	rows, err := s.db.Query(`
+	q := fmt.Sprintf(`
 		SELECT s.project, SUM(r.cost) as cost
 		FROM requests r
 		JOIN sessions s ON s.id = r.session_id
-		WHERE DATE(r.timestamp, 'localtime') >= ?
-		  AND DATE(r.timestamp, 'localtime') < ?
+		WHERE %s
 		GROUP BY s.project
 		HAVING cost > 0
-		ORDER BY cost DESC`, prevMonthStart, thisMonthStart)
+		ORDER BY cost DESC`, where)
+
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -509,7 +515,6 @@ func (s *Store) GetProjectsPrevMonth() ([]ProjectMonthly, error) {
 		if err := rows.Scan(&pm.Project, &pm.Cost); err != nil {
 			return nil, err
 		}
-		pm.Month = monthLabel
 		data = append(data, pm)
 	}
 	return data, nil
@@ -561,11 +566,27 @@ type CostByType struct {
 	CacheWriteCost float64 `json:"cache_write_cost"`
 }
 
-func (s *Store) GetCostBreakdown() (*CostByType, error) {
-	rows, err := s.db.Query(`
-		SELECT model, total_input, total_output, total_cache_read,
-			total_cache_write_5m, total_cache_write_1h
-		FROM sessions`)
+// GetCostBreakdownInRange computes input/output/cache-read/cache-write
+// dollar totals over [bounds.Start, bounds.End). Walks per-request rows so
+// each model's own rate card is applied (cache-write costs differ between
+// Opus 4.7 and Haiku, etc.) — summing pre-calculated total_cost wouldn't
+// give us the breakdown by token type.
+func (s *Store) GetCostBreakdownInRange(bounds TimeBounds) (*CostByType, error) {
+	where := "model != ''"
+	args := []any{}
+	if !bounds.Start.IsZero() {
+		where += " AND timestamp >= ?"
+		args = append(args, bounds.Start.UTC().Format(time.RFC3339Nano))
+	}
+	where += " AND timestamp < ?"
+	args = append(args, bounds.End.UTC().Format(time.RFC3339Nano))
+
+	q := fmt.Sprintf(`
+		SELECT model, input_tokens, output_tokens, cache_read_tokens,
+			cache_write_5m_tokens, cache_write_1h_tokens
+		FROM requests WHERE %s`, where)
+
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -603,16 +624,31 @@ type ModelSummary struct {
 	TotalTokens  int64   `json:"total_tokens"`
 }
 
-func (s *Store) GetModelBreakdown() ([]ModelSummary, error) {
-	rows, err := s.db.Query(`
+// GetModelBreakdownInRange returns per-model rollups computed from the
+// per-request stream filtered by [bounds.Start, bounds.End). session_count
+// is the number of distinct sessions touching the model in that window.
+func (s *Store) GetModelBreakdownInRange(bounds TimeBounds) ([]ModelSummary, error) {
+	where := "model != ''"
+	args := []any{}
+	if !bounds.Start.IsZero() {
+		where += " AND timestamp >= ?"
+		args = append(args, bounds.Start.UTC().Format(time.RFC3339Nano))
+	}
+	where += " AND timestamp < ?"
+	args = append(args, bounds.End.UTC().Format(time.RFC3339Nano))
+
+	q := fmt.Sprintf(`
 		SELECT model,
-			COUNT(*) as session_count,
-			SUM(total_cost) as total_cost,
-			SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h) as total_tokens
-		FROM sessions
-		WHERE model != ''
+			COUNT(DISTINCT session_id) as session_count,
+			SUM(cost) as total_cost,
+			SUM(input_tokens + output_tokens + cache_read_tokens
+				+ cache_write_5m_tokens + cache_write_1h_tokens) as total_tokens
+		FROM requests
+		WHERE %s
 		GROUP BY model
-		ORDER BY total_cost DESC`)
+		ORDER BY total_cost DESC`, where)
+
+	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
 	}

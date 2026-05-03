@@ -2,7 +2,10 @@
   <div class="model-card">
     <div class="chart-header">
       <div class="chart-title">Spend by Model</div>
-      <div class="chart-meta" v-if="totalCost > 0">{{ formatCostDisplay(totalCost) }} total</div>
+      <div class="header-right">
+        <span class="chart-meta" v-if="totalCost > 0">{{ formatCostDisplay(totalCost) }} total</span>
+        <slot name="header-action" />
+      </div>
     </div>
     <div class="model-bars">
       <div v-for="(group, i) in familyGroups" :key="group.family" class="model-bar-row">
@@ -93,6 +96,11 @@ function barWidth(cost: number) {
   letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--text-tertiary);
+}
+.header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
 }
 .chart-meta {
   font-family: 'JetBrains Mono', monospace;

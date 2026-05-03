@@ -1,4 +1,4 @@
-import type { Summary, SessionsResponse, Session, DailySpend, Settings, RatesResponse, ProjectSummary, ProjectMonthly, ProjectGroupsResponse, ModelSummary, HeatmapCell, RequestRecord, WindowAnchor } from './types'
+import type { Summary, SessionsResponse, Session, DailySpend, Settings, RatesResponse, ProjectSummary, ProjectMonthly, ProjectGroupsResponse, ModelSummary, HeatmapCell, RequestRecord, WindowAnchor, CostBreakdown } from './types'
 
 const BASE = '/api/v1'
 
@@ -70,16 +70,20 @@ export async function fetchProjectMonthly(): Promise<ProjectMonthly[]> {
   return get<ProjectMonthly[]>('/projects/monthly')
 }
 
-export async function fetchProjectsPrevMonth(): Promise<ProjectMonthly[]> {
-  return get<ProjectMonthly[]>('/projects/prev-month')
+export async function fetchProjectsSpend(range = '30d'): Promise<ProjectMonthly[]> {
+  return get<ProjectMonthly[]>(`/projects/spend?range=${encodeURIComponent(range)}`)
+}
+
+export async function fetchCostBreakdown(range = '30d'): Promise<CostBreakdown> {
+  return get<CostBreakdown>(`/cost-breakdown?range=${encodeURIComponent(range)}`)
 }
 
 export async function fetchRates(): Promise<RatesResponse> {
   return get<RatesResponse>('/rates')
 }
 
-export async function fetchModels(): Promise<ModelSummary[]> {
-  return get<ModelSummary[]>('/models')
+export async function fetchModels(range = '30d'): Promise<ModelSummary[]> {
+  return get<ModelSummary[]>(`/models?range=${encodeURIComponent(range)}`)
 }
 
 export async function fetchHeatmap(): Promise<HeatmapCell[]> {

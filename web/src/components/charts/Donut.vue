@@ -1,7 +1,10 @@
 <template>
   <div class="donut-card">
     <div class="chart-header">
-      <div class="chart-title">{{ title }}</div>
+      <div class="chart-title-row">
+        <div class="chart-title">{{ title }}</div>
+        <slot name="header-action" />
+      </div>
       <div v-if="subtitle" class="chart-subtitle">{{ subtitle }}</div>
     </div>
     <div v-if="hasData" class="donut-wrap">
@@ -106,6 +109,12 @@ const chartOptions = {
 }
 .chart-header {
   margin-bottom: var(--space-5);
+}
+.chart-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
 }
 .chart-title {
   font-size: 11px;
