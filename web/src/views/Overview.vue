@@ -13,7 +13,7 @@
         :highlight="true"
         :budget="store.summary.budget"
         :trendPct="dayTrend"
-        trendLabel="yesterday"
+        :prevName="yesterdayLabel"
         :prevAmount="store.summary.trends?.prev_day_cost"
       />
       <StatCard
@@ -21,7 +21,7 @@
         :value="store.summary.week.cost"
         :tokens="store.summary.week.tokens"
         :trendPct="weekTrend"
-        trendLabel="prev week"
+        :prevName="prevWeekLabel"
         :prevAmount="store.summary.trends?.prev_week_cost"
       />
       <StatCard
@@ -29,7 +29,6 @@
         :value="store.summary.month.cost"
         :tokens="store.summary.month.tokens"
         :trendPct="monthTrend"
-        trendLabel="prev month"
         :prevName="prevMonthName"
         :prevAmount="store.summary.trends?.prev_month_cost"
       />
@@ -197,6 +196,18 @@ function isoWeek(d: Date): number {
 }
 
 const weekLabel = computed(() => `Week ${isoWeek(new Date())}`)
+
+const yesterdayLabel = computed(() => {
+  const d = new Date()
+  d.setDate(d.getDate() - 1)
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+})
+
+const prevWeekLabel = computed(() => {
+  const d = new Date()
+  d.setDate(d.getDate() - 7)
+  return `Week ${isoWeek(d)}`
+})
 
 async function openSession(id: string) {
   selectedSession.value = await fetchSession(id)
