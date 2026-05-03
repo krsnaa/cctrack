@@ -4,12 +4,18 @@
       <div class="window-bar-head">
         <span class="window-bar-title">{{ w.title }}</span>
         <span class="window-bar-meta">
-          {{ w.pct }}%<span class="sep">·</span>{{ w.remaining }} left
+          <span :class="['pace', w.paceClass]" v-if="w.paceText">{{ w.paceText }}</span>
+          <span class="sep" v-if="w.paceText">·</span>
+          <span class="remaining">{{ w.remaining }} left</span>
         </span>
       </div>
       <div class="window-bar-track" :title="w.tooltip">
-        <div class="window-bar-fill" :style="{ width: w.pct + '%' }"></div>
-        <div class="window-bar-marker" :style="{ left: w.pct + '%' }"></div>
+        <!-- Usage fill: cost so far as a fraction of the previous window's
+             total cost. Clamped to 100% visually; actual value shown in pace. -->
+        <div class="window-bar-fill" :style="{ width: w.usageWidth + '%' }"></div>
+        <!-- Time marker: where we are in the window's clock. Sliding white
+             line; if fill is to its right, you're over pace, and vice versa. -->
+        <div class="window-bar-marker" :style="{ left: w.timePct + '%' }"></div>
       </div>
     </div>
   </div>
@@ -56,26 +62,50 @@ function fmtRange(start: string, end: string): string {
   return `${s.toLocaleString('en-GB', opts)} → ${e.toLocaleString('en-GB', opts)}`
 }
 
+interface Bar {
+  title: string
+  timePct: number
+  usagePct: number   // actual ratio (can exceed 100%)
+  usageWidth: number // clamped 0-100 for rendering
+  paceText: string
+  paceClass: string  // 'over', 'under', or '' for neutral / no-pace
+  remaining: string
+  tooltip: string
+}
+
+function buildBar(title: string, w: WindowBucket | null): Bar | null {
+  if (!w?.start) return null
+  const timePct = Math.round(pctElapsed(w.start, w.end) * 10) / 10
+  const remaining = remainingLabel(w.end)
+  const tooltip = fmtRange(w.start, w.end)
+
+  // Usage fill is normalized against the previous window's total cost. Without
+  // a previous window we can't compute pace meaningfully — show time marker
+  // only, no fill.
+  if (!w.prev_cost || w.prev_cost <= 0) {
+    return {
+      title, timePct, usagePct: 0, usageWidth: 0,
+      paceText: 'no prev window', paceClass: '',
+      remaining, tooltip,
+    }
+  }
+  const usagePct = (w.cost / w.prev_cost) * 100
+  const usageWidth = Math.max(0, Math.min(100, usagePct))
+  // Pace = how far ahead/behind the time marker the usage fill is. Same metric
+  // for both directions; sign tells us which.
+  const delta = usagePct - timePct
+  const sign = delta > 0 ? '+' : ''
+  const paceClass = delta > 5 ? 'over' : delta < -5 ? 'under' : ''
+  const paceText = `${sign}${Math.round(delta)}% pace`
+  return { title, timePct, usagePct, usageWidth, paceText, paceClass, remaining, tooltip }
+}
+
 const bars = computed(() => {
-  const out: Array<{ title: string; pct: number; remaining: string; tooltip: string }> = []
-  if (props.fiveHour?.start) {
-    const pct = Math.round(pctElapsed(props.fiveHour.start, props.fiveHour.end) * 10) / 10
-    out.push({
-      title: '5h Window',
-      pct,
-      remaining: remainingLabel(props.fiveHour.end),
-      tooltip: fmtRange(props.fiveHour.start, props.fiveHour.end),
-    })
-  }
-  if (props.sevenDay?.start) {
-    const pct = Math.round(pctElapsed(props.sevenDay.start, props.sevenDay.end) * 10) / 10
-    out.push({
-      title: '7d Window',
-      pct,
-      remaining: remainingLabel(props.sevenDay.end),
-      tooltip: fmtRange(props.sevenDay.start, props.sevenDay.end),
-    })
-  }
+  const out: Bar[] = []
+  const a = buildBar('5h Window', props.fiveHour)
+  if (a) out.push(a)
+  const b = buildBar('7d Window', props.sevenDay)
+  if (b) out.push(b)
   return out
 })
 </script>
@@ -110,14 +140,20 @@ const bars = computed(() => {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
   color: var(--text-secondary);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
 }
 .window-bar-meta .sep {
-  margin: 0 6px;
   color: var(--text-disabled);
 }
+.window-bar-meta .pace.over { color: var(--cost-high); }
+.window-bar-meta .pace.under { color: #4ade80; }
+.window-bar-meta .remaining { color: var(--text-tertiary); }
+
 .window-bar-track {
   position: relative;
-  height: 8px;
+  height: 10px;
   background: var(--bg-subtle);
   border: 1px solid var(--border-subtle);
   border-radius: 999px;
@@ -129,13 +165,18 @@ const bars = computed(() => {
   background: var(--amber-500);
   transition: width 600ms cubic-bezier(0.16, 1, 0.3, 1);
 }
+/* Time marker: a high-contrast vertical line that slides across the track.
+   The eye reads "fill behind marker = under pace" / "fill past marker = over
+   pace" without needing the numeric label. */
 .window-bar-marker {
   position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 2px;
+  top: -2px;
+  bottom: -2px;
+  width: 3px;
   background: var(--text-primary);
-  transform: translateX(-1px);
+  transform: translateX(-1.5px);
+  box-shadow: 0 0 0 1px var(--bg-base);
   transition: left 600ms cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 1;
 }
 </style>
