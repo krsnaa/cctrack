@@ -3,7 +3,7 @@
     <div class="page-header">
       <h1 class="page-title">Sessions</h1>
       <div class="page-meta">
-        {{ store.total }} {{ store.dateFilter ? 'on ' + dateFilterLabel : 'total' }}
+        {{ store.total }} {{ pluralizeProjects(store.total) }}{{ store.dateFilter ? ' on ' + dateFilterLabel : '' }}
       </div>
     </div>
 
@@ -17,11 +17,10 @@
       <table>
         <thead>
           <tr>
-            <th style="width:40px">#</th>
-            <th>Session</th>
-            <th class="sortable" @click="store.setSort('model')">
-              Model
-              <span v-if="store.sortBy === 'model'" class="sort-arrow">{{ store.sortDir === 'desc' ? '↓' : '↑' }}</span>
+            <th style="width:40px"></th>
+            <th class="sortable" @click="store.setSort('project')">
+              Project
+              <span v-if="store.sortBy === 'project'" class="sort-arrow">{{ store.sortDir === 'desc' ? '↓' : '↑' }}</span>
             </th>
             <th class="sortable" @click="store.setSort('started')">
               Started
@@ -42,24 +41,34 @@
           </tr>
         </thead>
         <tbody>
-          <SessionRow
-            v-for="(session, i) in store.sessions"
-            :key="session.id"
-            :session="session"
-            :rank="store.offset + i + 1"
-            show-started
-            @select="store.selectSession"
-          />
+          <template v-for="group in store.groups" :key="group.project">
+            <ProjectGroupRow
+              :group="group"
+              :expanded="store.expanded.has(group.project)"
+              @toggle="store.toggleExpand"
+            />
+            <template v-if="store.expanded.has(group.project)">
+              <tr v-if="store.childLoading.has(group.project)" class="loading-row">
+                <td></td>
+                <td colspan="5">Loading sessions…</td>
+              </tr>
+              <SessionRow
+                v-for="(session, i) in (store.childSessions.get(group.project) || [])"
+                :key="session.id"
+                :session="session"
+                :rank="i + 1"
+                show-started
+                subordinate
+                @select="store.selectSession"
+              />
+            </template>
+          </template>
+          <tr v-if="!store.loading && !store.groups.length" class="empty-row">
+            <td></td>
+            <td colspan="5">No sessions{{ store.dateFilter ? ' on ' + dateFilterLabel : '' }}.</td>
+          </tr>
         </tbody>
       </table>
-    </div>
-
-    <div class="pagination" v-if="store.total > store.limit">
-      <button @click="store.prevPage()" :disabled="store.offset === 0">← Prev</button>
-      <span class="page-info">
-        {{ store.offset + 1 }}–{{ Math.min(store.offset + store.limit, store.total) }} of {{ store.total }}
-      </span>
-      <button @click="store.nextPage()" :disabled="store.offset + store.limit >= store.total">Next →</button>
     </div>
 
     <SlideOver :open="!!store.selectedSession" @close="store.clearSelection()">
@@ -73,6 +82,7 @@ import { computed, onMounted, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { useSessionsStore } from '../stores/sessions'
 import SessionRow from '../components/domain/SessionRow.vue'
+import ProjectGroupRow from '../components/domain/ProjectGroupRow.vue'
 import SessionDetail from '../components/domain/SessionDetail.vue'
 import SlideOver from '../components/primitives/SlideOver.vue'
 
@@ -86,8 +96,8 @@ function syncFromRoute() {
   const date = (route.query.date as string) || ''
   if (date !== store.dateFilter) {
     store.setDateFilter(date)
-  } else if (!store.sessions.length) {
-    store.load()
+  } else if (!store.groups.length) {
+    store.loadGroups()
   }
 }
 
@@ -96,6 +106,10 @@ watch(() => route.query.date, syncFromRoute)
 
 function clearFilter() {
   router.replace({ query: { ...route.query, date: undefined } })
+}
+
+function pluralizeProjects(n: number) {
+  return n === 1 ? 'project' : 'projects'
 }
 
 const dateFilterLabel = computed(() => {
@@ -194,33 +208,10 @@ thead th.sortable:hover { color: var(--text-secondary); }
   margin-left: 4px;
 }
 
-.pagination {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: var(--space-6);
-  margin-top: var(--space-6);
-}
-.pagination button {
-  background: var(--bg-surface);
-  border: 1px solid var(--border-default);
-  color: var(--text-secondary);
-  padding: var(--space-2) var(--space-4);
-  font-size: 13px;
-  cursor: pointer;
-  transition: background 150ms, color 150ms;
-}
-.pagination button:hover:not(:disabled) {
-  background: var(--bg-elevated);
-  color: var(--text-primary);
-}
-.pagination button:disabled {
-  opacity: 0.3;
-  cursor: default;
-}
-.page-info {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
+tr.loading-row td,
+tr.empty-row td {
+  padding: var(--space-4) var(--space-5);
   color: var(--text-tertiary);
+  font-size: 12px;
 }
 </style>

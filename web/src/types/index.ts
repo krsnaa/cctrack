@@ -86,6 +86,23 @@ export interface SessionsResponse {
   total: number
   limit: number
   offset: number
+  date?: string
+  project?: string
+}
+
+export interface ProjectGroup {
+  project: string
+  session_count: number
+  total_cost: number
+  total_tokens: number
+  started_at: string
+  last_activity: string
+}
+
+export interface ProjectGroupsResponse {
+  groups: ProjectGroup[]
+  total: number
+  date?: string
 }
 
 export interface Settings {

@@ -1,4 +1,4 @@
-import type { Summary, SessionsResponse, Session, DailySpend, Settings, RatesResponse, ProjectSummary, ProjectMonthly, ModelSummary, HeatmapCell, RequestRecord } from './types'
+import type { Summary, SessionsResponse, Session, DailySpend, Settings, RatesResponse, ProjectSummary, ProjectMonthly, ProjectGroupsResponse, ModelSummary, HeatmapCell, RequestRecord } from './types'
 
 const BASE = '/api/v1'
 
@@ -17,12 +17,23 @@ export async function fetchSessions(
   offset = 0,
   sort = 'cost',
   dir = 'desc',
-  date = ''
+  date = '',
+  project = '',
 ): Promise<SessionsResponse> {
   const datePart = date ? `&date=${encodeURIComponent(date)}` : ''
+  const projectPart = project ? `&project=${encodeURIComponent(project)}` : ''
   return get<SessionsResponse>(
-    `/sessions?limit=${limit}&offset=${offset}&sort=${sort}&dir=${dir}${datePart}`,
+    `/sessions?limit=${limit}&offset=${offset}&sort=${sort}&dir=${dir}${datePart}${projectPart}`,
   )
+}
+
+export async function fetchSessionsGrouped(
+  sort = 'date',
+  dir = 'desc',
+  date = '',
+): Promise<ProjectGroupsResponse> {
+  const datePart = date ? `&date=${encodeURIComponent(date)}` : ''
+  return get<ProjectGroupsResponse>(`/sessions/grouped?sort=${sort}&dir=${dir}${datePart}`)
 }
 
 export async function fetchSession(id: string): Promise<Session> {

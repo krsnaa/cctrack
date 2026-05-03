@@ -1,5 +1,5 @@
 <template>
-  <tr :class="{ 'active-session': isActive }" @click="$emit('select', session.id)">
+  <tr :class="{ 'active-session': isActive, 'subordinate-row': subordinate }" @click="$emit('select', session.id)">
     <td class="rank">{{ rank }}</td>
     <td>
       <div class="session-name">
@@ -26,13 +26,21 @@ const props = defineProps<{
   rank: number
   isActive?: boolean
   showStarted?: boolean
+  subordinate?: boolean
 }>()
 
 defineEmits<{ select: [id: string] }>()
 
-const displayName = computed(() =>
-  props.session.project || props.session.slug || props.session.id.slice(0, 8)
-)
+// When this row is rendered as a child inside a project group, the project
+// name is redundant — surface the slug/id instead so adjacent rows are
+// distinguishable.
+const displayName = computed(() => {
+  const s = props.session
+  if (props.subordinate) {
+    return s.slug || s.id.slice(0, 8)
+  }
+  return s.project || s.slug || s.id.slice(0, 8)
+})
 
 const totalTokens = computed(() =>
   props.session.total_input + props.session.total_output +
@@ -54,6 +62,17 @@ tr.active-session {
 }
 tr.active-session td:first-child {
   border-left: 2px solid var(--amber-500);
+}
+tr.subordinate-row {
+  background: rgba(255, 255, 255, 0.012);
+}
+tr.subordinate-row td:nth-child(2) {
+  padding-left: var(--space-10);
+}
+tr.subordinate-row .session-name {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
 }
 
 td {
