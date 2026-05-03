@@ -5,15 +5,21 @@
       <div class="page-date">{{ currentDate }}</div>
     </div>
 
+    <WindowBars
+      v-if="store.summary"
+      :fiveHour="store.summary.window_5h"
+      :sevenDay="store.summary.window_7d"
+    />
+
     <div class="stat-grid" v-if="store.summary">
       <StatCard
-        :label="hourLabel"
-        :value="store.summary.hour?.cost ?? 0"
-        :tokens="store.summary.hour?.tokens ?? 0"
+        label="5h Window"
+        :value="store.summary.window_5h?.cost ?? 0"
+        :tokens="store.summary.window_5h?.tokens ?? 0"
         :highlight="true"
-        :trendPct="hourTrend"
-        :prevName="prevHourLabel"
-        :prevAmount="store.summary.trends?.prev_hour_cost"
+        :trendPct="window5hTrend"
+        trendLabel="prev 5h"
+        :prevAmount="store.summary.window_5h?.prev_cost"
       />
       <StatCard
         :label="todayLabel"
@@ -24,12 +30,12 @@
         :prevAmount="store.summary.trends?.prev_day_cost"
       />
       <StatCard
-        :label="weekLabel"
-        :value="store.summary.week.cost"
-        :tokens="store.summary.week.tokens"
-        :trendPct="weekTrend"
-        :prevName="prevWeekLabel"
-        :prevAmount="store.summary.trends?.prev_week_cost"
+        label="7d Window"
+        :value="store.summary.window_7d?.cost ?? 0"
+        :tokens="store.summary.window_7d?.tokens ?? 0"
+        :trendPct="window7dTrend"
+        trendLabel="prev 7d"
+        :prevAmount="store.summary.window_7d?.prev_cost"
       />
       <StatCard
         :label="monthLabel"
@@ -144,6 +150,7 @@ import DailySpendChart from '../components/charts/DailySpendChart.vue'
 import Donut from '../components/charts/Donut.vue'
 import ModelBreakdown from '../components/charts/ModelBreakdown.vue'
 import ActivityHeatmap from '../components/charts/ActivityHeatmap.vue'
+import WindowBars from '../components/charts/WindowBars.vue'
 import SessionRow from '../components/domain/SessionRow.vue'
 import SessionDetail from '../components/domain/SessionDetail.vue'
 import SlideOver from '../components/primitives/SlideOver.vue'
@@ -168,9 +175,10 @@ function trendPct(current: number, previous: number): number | null {
   return Math.round(((current - previous) / previous) * 100)
 }
 
-const hourTrend = computed(() => {
-  if (!store.summary?.trends) return null
-  return trendPct(store.summary.hour?.cost ?? 0, store.summary.trends.prev_hour_cost)
+const window5hTrend = computed(() => {
+  const w = store.summary?.window_5h
+  if (!w) return null
+  return trendPct(w.cost, w.prev_cost)
 })
 
 const dayTrend = computed(() => {
@@ -178,9 +186,10 @@ const dayTrend = computed(() => {
   return trendPct(store.summary.today.cost, store.summary.trends.prev_day_cost)
 })
 
-const weekTrend = computed(() => {
-  if (!store.summary?.trends) return null
-  return trendPct(store.summary.week.cost, store.summary.trends.prev_week_cost)
+const window7dTrend = computed(() => {
+  const w = store.summary?.window_7d
+  if (!w) return null
+  return trendPct(w.cost, w.prev_cost)
 })
 
 const monthTrend = computed(() => {
@@ -212,32 +221,6 @@ const monthLabel = computed(() =>
   new Date().toLocaleDateString('en-GB', { month: 'long' }),
 )
 
-// ISO 8601 week number: weeks run Mon–Sun and week 1 is the one containing
-// the year's first Thursday. Avoids locale ambiguity around whether weeks
-// start on Sunday or whether the year's first partial week is counted.
-function isoWeek(d: Date): number {
-  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate())
-  target.setDate(target.getDate() - ((target.getDay() + 6) % 7) + 3)
-  const firstThursday = new Date(target.getFullYear(), 0, 4)
-  return 1 + Math.round(
-    ((target.getTime() - firstThursday.getTime()) / 86400000
-      - 3 + ((firstThursday.getDay() + 6) % 7)) / 7,
-  )
-}
-
-const weekLabel = computed(() => `Week ${isoWeek(new Date())}`)
-
-const hourLabel = computed(() => {
-  const h = new Date().getHours()
-  return h.toString().padStart(2, '0') + ':00'
-})
-
-const prevHourLabel = computed(() => {
-  const d = new Date()
-  d.setHours(d.getHours() - 1)
-  return d.getHours().toString().padStart(2, '0') + ':00'
-})
-
 // Slices for the two Overview donuts.
 const costBreakdownSlices = computed(() => {
   const cb = store.summary?.cost_breakdown
@@ -266,12 +249,6 @@ const yesterdayLabel = computed(() => {
   const d = new Date()
   d.setDate(d.getDate() - 1)
   return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-})
-
-const prevWeekLabel = computed(() => {
-  const d = new Date()
-  d.setDate(d.getDate() - 7)
-  return `Week ${isoWeek(d)}`
 })
 
 async function openSession(id: string) {

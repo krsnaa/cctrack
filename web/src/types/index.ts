@@ -11,16 +11,24 @@ export interface CostBreakdown {
 }
 
 export interface Trends {
-  prev_hour_cost: number
   prev_day_cost: number
-  prev_week_cost: number
   prev_month_cost: number
 }
 
+export interface WindowBucket {
+  start: string
+  end: string
+  cost: number
+  tokens: number
+  request_count: number
+  prev_cost: number
+  prev_start: string
+}
+
 export interface Summary {
-  hour: SpendBucket
+  window_5h: WindowBucket
   today: SpendBucket
-  week: SpendBucket
+  window_7d: WindowBucket
   month: SpendBucket
   projected: number
   tokens: {
