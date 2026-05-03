@@ -3,11 +3,11 @@
     <td class="rank">{{ rank }}</td>
     <td>
       <div class="session-name">
-        {{ displayName }}
+        <span class="name-text">{{ displayName }}</span>
+        <span class="model-pill">{{ formatModel(session.model) }}</span>
         <span v-if="isActive" class="live-badge">Live</span>
       </div>
     </td>
-    <td><Badge :label="formatModel(session.model)" /></td>
     <td v-if="showStarted" class="time-cell">{{ formatDate(session.started_at) }}</td>
     <td class="time-cell">{{ formatDate(session.last_activity) }}</td>
     <td class="token-cell">{{ formatTokens(totalTokens) }}</td>
@@ -18,7 +18,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import type { Session } from '../../types'
-import Badge from '../primitives/Badge.vue'
 import { formatCostDisplay, formatTokens, formatModel, formatDate } from '../../composables/useFormatCost'
 
 const props = defineProps<{
@@ -98,6 +97,14 @@ tr:first-child .rank { color: var(--amber-500); }
   display: flex;
   align-items: center;
   gap: var(--space-2);
+}
+.model-pill {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: var(--text-tertiary);
+  background: var(--bg-subtle);
+  padding: 2px 6px;
+  border: 1px solid var(--border-subtle);
 }
 .live-badge {
   font-family: 'JetBrains Mono', monospace;
