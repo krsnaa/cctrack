@@ -7,7 +7,7 @@
 
     <div class="stat-grid" v-if="store.summary">
       <StatCard
-        label="Today"
+        :label="todayLabel"
         :value="store.summary.today.cost"
         :tokens="store.summary.today.tokens"
         :highlight="true"
@@ -17,7 +17,7 @@
         :prevAmount="store.summary.trends?.prev_day_cost"
       />
       <StatCard
-        label="This Week"
+        :label="weekLabel"
         :value="store.summary.week.cost"
         :tokens="store.summary.week.tokens"
         :trendPct="weekTrend"
@@ -25,7 +25,7 @@
         :prevAmount="store.summary.trends?.prev_week_cost"
       />
       <StatCard
-        label="This Month"
+        :label="monthLabel"
         :value="store.summary.month.cost"
         :tokens="store.summary.month.tokens"
         :trendPct="monthTrend"
@@ -174,6 +174,29 @@ const prevMonthName = computed(() => {
   d.setMonth(d.getMonth() - 1)
   return d.toLocaleDateString('en-GB', { month: 'long' })
 })
+
+const todayLabel = computed(() =>
+  new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }),
+)
+
+const monthLabel = computed(() =>
+  new Date().toLocaleDateString('en-GB', { month: 'long' }),
+)
+
+// ISO 8601 week number: weeks run Mon–Sun and week 1 is the one containing
+// the year's first Thursday. Avoids locale ambiguity around whether weeks
+// start on Sunday or whether the year's first partial week is counted.
+function isoWeek(d: Date): number {
+  const target = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  target.setDate(target.getDate() - ((target.getDay() + 6) % 7) + 3)
+  const firstThursday = new Date(target.getFullYear(), 0, 4)
+  return 1 + Math.round(
+    ((target.getTime() - firstThursday.getTime()) / 86400000
+      - 3 + ((firstThursday.getDay() + 6) % 7)) / 7,
+  )
+}
+
+const weekLabel = computed(() => `Week ${isoWeek(new Date())}`)
 
 async function openSession(id: string) {
   selectedSession.value = await fetchSession(id)
