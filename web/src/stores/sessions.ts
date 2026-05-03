@@ -8,7 +8,9 @@ export const useSessionsStore = defineStore('sessions', () => {
   const total = ref(0)
   const limit = ref(25)
   const offset = ref(0)
-  const sortBy = ref('cost')
+  // Default sort by most-recent activity — surfacing today's work on /sessions
+  // is more useful than ranking by all-time cost.
+  const sortBy = ref('date')
   const sortDir = ref<'asc' | 'desc'>('desc')
   const selectedSession = ref<Session | null>(null)
   const loading = ref(false)
