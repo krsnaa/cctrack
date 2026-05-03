@@ -134,7 +134,7 @@
     </div>
 
     <div class="section-header top-section" v-if="store.topSessions.length">
-      <div class="section-title">Most Expensive</div>
+      <div class="section-title">Most Expensive Sessions</div>
     </div>
 
     <div class="sessions-table-wrap" v-if="store.topSessions.length">
