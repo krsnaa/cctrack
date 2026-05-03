@@ -215,10 +215,15 @@ func (s *Store) GetWindowBucket(duration time.Duration) (WindowBucket, error) {
 func (s *Store) GetDailySummary(days int) ([]DailySpend, error) {
 	since := time.Now().AddDate(0, 0, -days).Format("2006-01-02")
 
+	// Aggregate from requests, not sessions: a session has a single
+	// last_activity timestamp, so summing sessions.total_cost grouped by
+	// last_activity dumps every day of a multi-day session into the day it
+	// last saw a request. Per-request timestamps attribute cost to the day
+	// it was actually incurred.
 	rows, err := s.db.Query(`
-		SELECT DATE(last_activity, 'localtime') as day, SUM(total_cost)
-		FROM sessions
-		WHERE DATE(last_activity, 'localtime') >= ?
+		SELECT DATE(timestamp, 'localtime') as day, SUM(cost)
+		FROM requests
+		WHERE DATE(timestamp, 'localtime') >= ?
 		GROUP BY day
 		ORDER BY day ASC`, since)
 	if err != nil {
