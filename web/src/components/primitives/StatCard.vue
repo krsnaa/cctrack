@@ -8,10 +8,10 @@
     </div>
     <div v-if="trendPct !== undefined && trendPct !== null" class="stat-trend" :class="trendClass">
       <span class="trend-arrow">{{ trendPct > 0 ? '↑' : trendPct < 0 ? '↓' : '→' }}</span>
-      <span>{{ Math.abs(trendPct) }}% vs {{ trendLabel }}</span>
-      <span v-if="prevName || prevAmount !== undefined" class="trend-prev">
-        ({{ prevName }}<template v-if="prevName && prevAmount !== undefined"> · </template><template v-if="prevAmount !== undefined">{{ formatCostDisplay(prevAmount) }}</template>)
+      <span v-if="prevName">
+        {{ Math.abs(trendPct) }}% vs {{ prevName }}<template v-if="prevAmount !== undefined"> · {{ formatCostDisplay(prevAmount) }}</template>
       </span>
+      <span v-else>{{ Math.abs(trendPct) }}% vs {{ trendLabel }}</span>
     </div>
     <div v-if="highlight && budget > 0" class="budget-bar-wrap">
       <div class="budget-bar-fill" :style="{ width: budgetPct + '%', background: budgetColor }"></div>
@@ -132,10 +132,6 @@ const budgetColor = computed(() => {
 .stat-trend.trend-flat { color: var(--text-tertiary); }
 .trend-arrow {
   margin-right: 3px;
-}
-.trend-prev {
-  color: var(--text-tertiary);
-  margin-left: 6px;
 }
 .budget-bar-wrap {
   margin-top: var(--space-4);
