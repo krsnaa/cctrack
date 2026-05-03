@@ -4,7 +4,7 @@ package calculator
 // a rate changes or a model is added — the dashboard surfaces them so users can
 // tell at a glance whether their build is on stale pricing.
 const (
-	RatesVersion = "v1.1"
+	RatesVersion = "v1.2"
 	RatesUpdated = "2026-05-03"
 )
 
@@ -28,7 +28,11 @@ var Rates = []ModelRates{
 	// Opus 4 / 4.1 — original tier.
 	{Family: "claude-opus-4-1", InputPerMToken: 15.00, OutputPerMToken: 75.00, CacheReadPerMToken: 1.50, CacheWrite5mPerMToken: 18.75, CacheWrite1hPerMToken: 30.00},
 	{Family: "claude-opus-4", InputPerMToken: 15.00, OutputPerMToken: 75.00, CacheReadPerMToken: 1.50, CacheWrite5mPerMToken: 18.75, CacheWrite1hPerMToken: 30.00},
-	// Sonnet 4 / 4.5 / 4.6 — same pricing across the family.
+	// Sonnet 4 / 4.5 / 4.6 — same pricing across the family today, but listed
+	// explicitly so a future per-version repricing is a one-line change rather
+	// than a silent misattribution under the blanket prefix.
+	{Family: "claude-sonnet-4-6", InputPerMToken: 3.00, OutputPerMToken: 15.00, CacheReadPerMToken: 0.30, CacheWrite5mPerMToken: 3.75, CacheWrite1hPerMToken: 6.00},
+	{Family: "claude-sonnet-4-5", InputPerMToken: 3.00, OutputPerMToken: 15.00, CacheReadPerMToken: 0.30, CacheWrite5mPerMToken: 3.75, CacheWrite1hPerMToken: 6.00},
 	{Family: "claude-sonnet-4", InputPerMToken: 3.00, OutputPerMToken: 15.00, CacheReadPerMToken: 0.30, CacheWrite5mPerMToken: 3.75, CacheWrite1hPerMToken: 6.00},
 	// Haiku 4.5.
 	{Family: "claude-haiku-4-5", InputPerMToken: 1.00, OutputPerMToken: 5.00, CacheReadPerMToken: 0.10, CacheWrite5mPerMToken: 1.25, CacheWrite1hPerMToken: 2.00},
