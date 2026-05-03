@@ -35,6 +35,29 @@ func (s *Store) Close() error {
 	return s.db.Close()
 }
 
+// ResetParsedData clears the sessions, requests, and file_offsets tables so a
+// subsequent ParseAll re-ingests every JSONL log from the beginning. Used by
+// `cctrack reset` to recover from incomplete state — e.g. when an older binary
+// populated sessions but the requests table didn't exist yet, leaving per-hour
+// queries blind to historical data.
+func (s *Store) ResetParsedData() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	for _, q := range []string{
+		"DELETE FROM requests",
+		"DELETE FROM sessions",
+		"DELETE FROM file_offsets",
+	} {
+		if _, err := tx.Exec(q); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
 func (s *Store) migrate() error {
 	_, err := s.db.Exec(`
 		CREATE TABLE IF NOT EXISTS sessions (
