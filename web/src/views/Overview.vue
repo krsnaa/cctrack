@@ -14,6 +14,7 @@
         :budget="store.summary.budget"
         :trendPct="dayTrend"
         trendLabel="yesterday"
+        :prevAmount="store.summary.trends?.prev_day_cost"
       />
       <StatCard
         label="This Week"
@@ -21,6 +22,7 @@
         :tokens="store.summary.week.tokens"
         :trendPct="weekTrend"
         trendLabel="prev week"
+        :prevAmount="store.summary.trends?.prev_week_cost"
       />
       <StatCard
         label="This Month"
