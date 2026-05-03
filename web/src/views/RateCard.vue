@@ -2,7 +2,9 @@
   <div>
     <div class="page-header">
       <h1 class="page-title">Rate Card</h1>
-      <div class="page-meta">v1.0 — bundled with binary</div>
+      <div class="page-meta">
+        {{ version || '—' }}<span v-if="updated"> · updated {{ updated }}</span>
+      </div>
     </div>
 
     <div class="rate-table-wrap" v-if="rates.length">
@@ -42,9 +44,14 @@ import type { ModelRate } from '../types'
 import { fetchRates } from '../api'
 
 const rates = ref<ModelRate[]>([])
+const version = ref('')
+const updated = ref('')
 
 onMounted(async () => {
-  rates.value = await fetchRates()
+  const r = await fetchRates()
+  rates.value = r.rates
+  version.value = r.version
+  updated.value = r.updated
 })
 </script>
 

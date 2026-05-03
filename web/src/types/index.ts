@@ -105,6 +105,12 @@ export interface ModelRate {
   CacheWrite1hPerMToken: number
 }
 
+export interface RatesResponse {
+  version: string
+  updated: string
+  rates: ModelRate[]
+}
+
 export interface ProjectSummary {
   project: string
   session_count: number

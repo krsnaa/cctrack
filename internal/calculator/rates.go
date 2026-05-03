@@ -1,5 +1,13 @@
 package calculator
 
+// RatesVersion / RatesUpdated identify the bundled rate card. Bump both whenever
+// a rate changes or a model is added — the dashboard surfaces them so users can
+// tell at a glance whether their build is on stale pricing.
+const (
+	RatesVersion = "v1.1"
+	RatesUpdated = "2026-05-03"
+)
+
 type ModelRates struct {
 	Family                string
 	InputPerMToken        float64
