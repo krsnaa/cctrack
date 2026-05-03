@@ -235,9 +235,19 @@ const costBreakdownSlices = computed(() => {
 // dashboard reads as one color story; cycles if there are more than 8 projects.
 const projectColors = ['#f59e0b', '#0ea5e9', '#10b981', '#a78bfa', '#fbbf24', '#ec4899', '#78716c', '#44403c']
 
+// Project paths can run very long (multi-segment iCloud / worktree paths).
+// Truncate at the data layer too so the donut tooltip and chartjs label
+// stay readable; CSS ellipsis handles legend layout.
+function truncateMid(name: string, max = 36): string {
+  if (name.length <= max) return name
+  const head = Math.ceil((max - 1) / 2)
+  const tail = Math.floor((max - 1) / 2)
+  return `${name.slice(0, head)}…${name.slice(name.length - tail)}`
+}
+
 const prevMonthProjectSlices = computed(() =>
   prevMonthProjects.value.slice(0, 8).map((p, i) => ({
-    label: p.project || '(no project)',
+    label: truncateMid(p.project || '(no project)'),
     value: p.cost,
     color: projectColors[i % projectColors.length],
   })),
@@ -313,7 +323,12 @@ onMounted(async () => {
 
 .insights-row {
   display: grid;
-  grid-template-columns: 340px 1fr 1fr;
+  /* minmax(0, 1fr) instead of 1fr: the default 1fr is minmax(auto, 1fr),
+     where 'auto' refuses to shrink below the content's min-content width.
+     Long project names in the legend would otherwise widen the third
+     track and push the card past the viewport. minmax(0,1fr) allows the
+     track to shrink so the inner text-overflow:ellipsis can kick in. */
+  grid-template-columns: 340px minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--space-5);
   margin-bottom: var(--space-8);
   align-items: stretch;
