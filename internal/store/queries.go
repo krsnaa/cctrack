@@ -39,23 +39,28 @@ type DailySpend struct {
 	Cost float64 `json:"cost"`
 }
 
-func (s *Store) GetSummary() (*Summary, error) {
+// GetSummary builds the dashboard summary. weeklyResetWeekday is 0=Sun..6=Sat
+// and weeklyResetHour is 0..23 in local time — they anchor the weekly window
+// to a fixed calendar moment (matching Anthropic's weekly limit reset, which
+// is fixed-schedule rather than rolling).
+func (s *Store) GetSummary(weeklyResetWeekday int, weeklyResetHour int) (*Summary, error) {
 	now := time.Now()
 	todayStr := now.Format("2006-01-02")
 	monthStart := time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
 
 	summary := &Summary{}
 
-	// Rolling 5-hour and 7-day windows from the request stream. See
-	// GetWindowBucket for the cascading-window algorithm; each window closes on
-	// its own clock, not on inactivity, so a continuously-active user has back-
-	// to-back windows.
+	// 5h: rolling, cascading. Each window closes on its own clock, not on
+	// inactivity. See GetWindowBucket.
 	w5, err := s.GetWindowBucket(5 * time.Hour)
 	if err != nil {
 		return nil, err
 	}
 	summary.Window5h = w5
-	w7, err := s.GetWindowBucket(7 * 24 * time.Hour)
+
+	// 7d: calendar-anchored to the configured weekday + hour, matching
+	// Anthropic's "Resets Tue 03:00 AM" semantic.
+	w7, err := s.GetWeeklyWindowAnchored(weeklyResetWeekday, weeklyResetHour)
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +93,63 @@ func (s *Store) GetSummary() (*Summary, error) {
 	}
 
 	return summary, nil
+}
+
+// GetWeeklyWindowAnchored returns the calendar-anchored weekly window that
+// contains `now`. The window starts at the most recent occurrence of
+// (resetWeekday, resetHour) in the host's local zone and lasts exactly 7 days.
+// PrevCost reflects the immediately preceding 7-day window so the StatCard
+// trend comparison stays consistent.
+func (s *Store) GetWeeklyWindowAnchored(resetWeekday int, resetHour int) (WindowBucket, error) {
+	now := time.Now()
+	start := mostRecentWeeklyAnchor(now, resetWeekday, resetHour)
+	end := start.AddDate(0, 0, 7)
+	prevStart := start.AddDate(0, 0, -7)
+
+	bucket := WindowBucket{
+		Start:     start.UTC().Format(time.RFC3339Nano),
+		End:       end.UTC().Format(time.RFC3339Nano),
+		PrevStart: prevStart.UTC().Format(time.RFC3339Nano),
+	}
+
+	// Current window totals
+	if err := s.db.QueryRow(`
+		SELECT COALESCE(SUM(cost), 0),
+		       COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens
+		                  + cache_write_5m_tokens + cache_write_1h_tokens), 0),
+		       COUNT(*)
+		FROM requests WHERE timestamp >= ? AND timestamp < ?`,
+		start.UTC().Format(time.RFC3339Nano),
+		end.UTC().Format(time.RFC3339Nano),
+	).Scan(&bucket.Cost, &bucket.Tokens, &bucket.RequestCount); err != nil {
+		return WindowBucket{}, err
+	}
+
+	// Previous window cost (for the trend chip)
+	if err := s.db.QueryRow(`
+		SELECT COALESCE(SUM(cost), 0)
+		FROM requests WHERE timestamp >= ? AND timestamp < ?`,
+		prevStart.UTC().Format(time.RFC3339Nano),
+		start.UTC().Format(time.RFC3339Nano),
+	).Scan(&bucket.PrevCost); err != nil {
+		return WindowBucket{}, err
+	}
+
+	return bucket, nil
+}
+
+// mostRecentWeeklyAnchor finds the most recent local-time moment matching
+// (weekday, hour) that is at or before `now`. Days back are computed mod 7 so
+// "this week's anchor hasn't happened yet" rolls back to last week's.
+func mostRecentWeeklyAnchor(now time.Time, weekday int, hour int) time.Time {
+	loc := now.Location()
+	candidate := time.Date(now.Year(), now.Month(), now.Day(), hour, 0, 0, 0, loc)
+	daysBack := (int(now.Weekday()) - weekday + 7) % 7
+	candidate = candidate.AddDate(0, 0, -daysBack)
+	if candidate.After(now) {
+		candidate = candidate.AddDate(0, 0, -7)
+	}
+	return candidate
 }
 
 // GetWindowBucket walks the request timestamps in order, opens a new rolling

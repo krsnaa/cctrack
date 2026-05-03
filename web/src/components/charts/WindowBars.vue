@@ -21,6 +21,7 @@
              line; if fill is to its right, you're over pace, and vice versa. -->
         <div class="window-bar-marker" :style="{ left: w.timePct + '%' }"></div>
       </div>
+      <div class="window-bar-resets">Resets {{ w.resetsAt }}</div>
     </div>
   </div>
 </template>
@@ -74,14 +75,32 @@ interface Bar {
   paceText: string
   paceClass: string  // 'over', 'under', or '' for neutral / no-pace
   remaining: string
+  resetsAt: string   // human-readable absolute reset moment, e.g. "Tue 03:00"
   tooltip: string
 }
 
-function buildBar(title: string, w: WindowBucket | null): Bar | null {
+function fmtResetMoment(end: string, longHorizon: boolean): string {
+  if (!end) return '—'
+  const d = new Date(end)
+  if (longHorizon) {
+    // Weekly window: surface day-of-week + time so the reset is recognizable
+    // ("Resets Tue 03:00") without parsing a duration.
+    return d.toLocaleString('en-GB', {
+      weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
+    })
+  }
+  // 5h window: same calendar day usually, just the time of day.
+  return d.toLocaleString('en-GB', {
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  })
+}
+
+function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): Bar | null {
   if (!w?.start) return null
   const timePct = Math.round(pctElapsed(w.start, w.end) * 10) / 10
   const remaining = remainingLabel(w.end)
   const tooltip = fmtRange(w.start, w.end)
+  const resetsAt = fmtResetMoment(w.end, longHorizon)
 
   // Usage fill is normalized against the previous window's total cost. Without
   // a previous window we can't compute pace meaningfully — show time marker
@@ -90,7 +109,7 @@ function buildBar(title: string, w: WindowBucket | null): Bar | null {
     return {
       title, timePct, usagePct: 0, usageWidth: 0,
       paceText: 'no prev window', paceClass: '',
-      remaining, tooltip,
+      remaining, resetsAt, tooltip,
     }
   }
   const usagePct = (w.cost / w.prev_cost) * 100
@@ -101,14 +120,14 @@ function buildBar(title: string, w: WindowBucket | null): Bar | null {
   const sign = delta > 0 ? '+' : ''
   const paceClass = delta > 5 ? 'over' : delta < -5 ? 'under' : ''
   const paceText = `${sign}${Math.round(delta)}% pace`
-  return { title, timePct, usagePct, usageWidth, paceText, paceClass, remaining, tooltip }
+  return { title, timePct, usagePct, usageWidth, paceText, paceClass, remaining, resetsAt, tooltip }
 }
 
 const bars = computed(() => {
   const out: Bar[] = []
-  const a = buildBar('5h Window', props.fiveHour)
+  const a = buildBar('5h Window', props.fiveHour, false)
   if (a) out.push(a)
-  const b = buildBar('7d Window', props.sevenDay)
+  const b = buildBar('7d Window', props.sevenDay, true)
   if (b) out.push(b)
   return out
 })
@@ -184,5 +203,11 @@ const bars = computed(() => {
   box-shadow: 0 0 0 1px var(--bg-base);
   transition: left 600ms cubic-bezier(0.16, 1, 0.3, 1);
   z-index: 1;
+}
+.window-bar-resets {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: var(--text-disabled);
+  margin-top: 2px;
 }
 </style>

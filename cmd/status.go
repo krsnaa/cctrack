@@ -29,7 +29,7 @@ var statusCmd = &cobra.Command{
 		p.ParseAll(cfg.LogDir)
 
 		// Get summary
-		summary, err := s.GetSummary()
+		summary, err := s.GetSummary(cfg.WeeklyResetWeekday, cfg.WeeklyResetHour)
 		if err != nil {
 			return fmt.Errorf("getting summary: %w", err)
 		}

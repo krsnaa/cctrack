@@ -43,7 +43,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
-	summary, err := a.store.GetSummary()
+	summary, err := a.store.GetSummary(a.cfg.WeeklyResetWeekday, a.cfg.WeeklyResetHour)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -275,7 +275,7 @@ func (a *API) handleWS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Send initial summary snapshot
-	summary, err := a.store.GetSummary()
+	summary, err := a.store.GetSummary(a.cfg.WeeklyResetWeekday, a.cfg.WeeklyResetHour)
 	if err == nil {
 		payload, _ := json.Marshal(summary)
 		event := hub.Event{Type: "summary.updated", Payload: payload}
