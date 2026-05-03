@@ -2,27 +2,33 @@
   <div>
     <div class="page-header">
       <h1 class="page-title">Rate Card</h1>
-      <div class="page-meta">v1.0 — bundled with binary</div>
+      <div class="page-meta">
+        {{ version || '—' }}<span v-if="updated"> · updated {{ updated }}</span>
+      </div>
     </div>
 
-    <div class="rate-table-wrap" v-if="rates.length">
+    <div class="rate-table-wrap" v-if="ratesSorted.length">
       <table>
         <thead>
           <tr>
             <th>Model</th>
+            <th>Released</th>
             <th class="right">Input</th>
             <th class="right">Output</th>
             <th class="right">Cache Read</th>
-            <th class="right">Cache Write</th>
+            <th class="right">Cache Write 5m</th>
+            <th class="right">Cache Write 1h</th>
           </tr>
         </thead>
         <tbody>
-          <tr v-for="rate in rates" :key="rate.Family">
+          <tr v-for="rate in ratesSorted" :key="rate.Family">
             <td class="model-name">{{ rate.Family }}</td>
+            <td class="released">{{ rate.Released || '—' }}</td>
             <td class="price right">${{ rate.InputPerMToken.toFixed(2) }}</td>
             <td class="price right">${{ rate.OutputPerMToken.toFixed(2) }}</td>
             <td class="price right">${{ rate.CacheReadPerMToken.toFixed(2) }}</td>
-            <td class="price right">${{ rate.CacheWritePerMToken.toFixed(2) }}</td>
+            <td class="price right">${{ rate.CacheWrite5mPerMToken.toFixed(2) }}</td>
+            <td class="price right">${{ rate.CacheWrite1hPerMToken.toFixed(2) }}</td>
           </tr>
         </tbody>
       </table>
@@ -35,14 +41,24 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
-import type { ModelRate } from '../types'
-import { fetchRates } from '../api'
+import { computed, onMounted } from 'vue'
+import { useRates } from '../composables/useRates'
 
-const rates = ref<ModelRate[]>([])
+const { rates, version, updated, load } = useRates()
+onMounted(load)
 
-onMounted(async () => {
-  rates.value = await fetchRates()
+// Display newest first. Entries without a Released date sink to the bottom
+// (alphabetical by Family within that bucket) so the empty rows don't muddle
+// the chronological view above them.
+const ratesSorted = computed(() => {
+  return [...rates.value].sort((a, b) => {
+    const ar = a.Released || ''
+    const br = b.Released || ''
+    if (ar && br) return br.localeCompare(ar)
+    if (ar) return -1
+    if (br) return 1
+    return a.Family.localeCompare(b.Family)
+  })
 })
 </script>
 
@@ -99,6 +115,12 @@ td.right { text-align: right; }
 .model-name {
   font-family: 'JetBrains Mono', monospace;
   color: var(--text-primary);
+}
+.released {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 12px;
+  color: var(--text-tertiary);
+  white-space: nowrap;
 }
 .price {
   font-family: 'JetBrains Mono', monospace;

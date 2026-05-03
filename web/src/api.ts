@@ -1,4 +1,4 @@
-import type { Summary, SessionsResponse, Session, DailySpend, Settings, ModelRate, ProjectSummary, ProjectMonthly, ModelSummary, HeatmapCell, RequestRecord } from './types'
+import type { Summary, SessionsResponse, Session, DailySpend, Settings, RatesResponse, ProjectSummary, ProjectMonthly, ProjectGroupsResponse, ModelSummary, HeatmapCell, RequestRecord, WindowAnchor, CostBreakdown } from './types'
 
 const BASE = '/api/v1'
 
@@ -16,9 +16,24 @@ export async function fetchSessions(
   limit = 25,
   offset = 0,
   sort = 'cost',
-  dir = 'desc'
+  dir = 'desc',
+  date = '',
+  project = '',
 ): Promise<SessionsResponse> {
-  return get<SessionsResponse>(`/sessions?limit=${limit}&offset=${offset}&sort=${sort}&dir=${dir}`)
+  const datePart = date ? `&date=${encodeURIComponent(date)}` : ''
+  const projectPart = project ? `&project=${encodeURIComponent(project)}` : ''
+  return get<SessionsResponse>(
+    `/sessions?limit=${limit}&offset=${offset}&sort=${sort}&dir=${dir}${datePart}${projectPart}`,
+  )
+}
+
+export async function fetchSessionsGrouped(
+  sort = 'date',
+  dir = 'desc',
+  date = '',
+): Promise<ProjectGroupsResponse> {
+  const datePart = date ? `&date=${encodeURIComponent(date)}` : ''
+  return get<ProjectGroupsResponse>(`/sessions/grouped?sort=${sort}&dir=${dir}${datePart}`)
 }
 
 export async function fetchSession(id: string): Promise<Session> {
@@ -55,12 +70,20 @@ export async function fetchProjectMonthly(): Promise<ProjectMonthly[]> {
   return get<ProjectMonthly[]>('/projects/monthly')
 }
 
-export async function fetchRates(): Promise<ModelRate[]> {
-  return get<ModelRate[]>('/rates')
+export async function fetchProjectsSpend(range = '30d'): Promise<ProjectMonthly[]> {
+  return get<ProjectMonthly[]>(`/projects/spend?range=${encodeURIComponent(range)}`)
 }
 
-export async function fetchModels(): Promise<ModelSummary[]> {
-  return get<ModelSummary[]>('/models')
+export async function fetchCostBreakdown(range = '30d'): Promise<CostBreakdown> {
+  return get<CostBreakdown>(`/cost-breakdown?range=${encodeURIComponent(range)}`)
+}
+
+export async function fetchRates(): Promise<RatesResponse> {
+  return get<RatesResponse>('/rates')
+}
+
+export async function fetchModels(range = '30d'): Promise<ModelSummary[]> {
+  return get<ModelSummary[]>(`/models?range=${encodeURIComponent(range)}`)
 }
 
 export async function fetchHeatmap(): Promise<HeatmapCell[]> {
@@ -69,4 +92,29 @@ export async function fetchHeatmap(): Promise<HeatmapCell[]> {
 
 export async function fetchSessionRequests(sessionId: string): Promise<RequestRecord[]> {
   return get<RequestRecord[]>(`/sessions/${sessionId}/requests`)
+}
+
+export async function fetchWindowAnchors(type: '5h' | '7d', limit = 50): Promise<{ anchors: WindowAnchor[] }> {
+  return get<{ anchors: WindowAnchor[] }>(`/window-anchors?type=${type}&limit=${limit}`)
+}
+
+export async function postWindowAnchor(
+  windowType: '5h' | '7d',
+  timeLeftMinutes: number,
+  anthropicPct?: number,
+): Promise<{ id: number; anchor: WindowAnchor }> {
+  const body: Record<string, unknown> = {
+    window_type: windowType,
+    time_left_minutes: timeLeftMinutes,
+  }
+  if (anthropicPct !== undefined && anthropicPct !== null) {
+    body.anthropic_pct = anthropicPct
+  }
+  const res = await fetch(`${BASE}/window-anchors`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`API error: ${res.status}`)
+  return res.json()
 }

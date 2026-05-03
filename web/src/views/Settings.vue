@@ -18,7 +18,19 @@
       </section>
 
       <section class="settings-section">
-        <div class="section-label">Budget</div>
+        <div class="section-label">Plan & Budget</div>
+        <div class="field">
+          <label>Claude Plan</label>
+          <select class="plan-select" v-model="store.draft.claude_plan">
+            <option value="">— not set —</option>
+            <option value="free">Free</option>
+            <option value="pro">Pro</option>
+            <option value="max-5x">Max (5x)</option>
+            <option value="max-20x">Max (20x)</option>
+            <option value="team">Team</option>
+            <option value="enterprise">Enterprise</option>
+          </select>
+        </div>
         <div class="field">
           <label>Monthly Budget (USD)</label>
           <div class="input-with-prefix">
@@ -45,10 +57,27 @@
       </section>
 
       <section class="settings-section">
+        <div class="section-label">Window Sync</div>
+        <p class="section-help">
+          cctrack only sees claude-code activity on this machine, so its
+          rolling window estimates can drift from what claude.ai shows. Paste
+          the time-left value (and optionally % used) from claude.ai → Settings
+          → Plan usage limits to anchor cctrack's windows to Anthropic's
+          authoritative state.
+        </p>
+
+        <WindowSync window-type="5h" />
+        <WindowSync window-type="7d" />
+      </section>
+
+      <section class="settings-section">
         <div class="section-label">About</div>
         <div class="about-grid">
           <span>Version</span><span class="mono">v0.1.0</span>
-          <span>Rate Card</span><span class="mono">v1.0</span>
+          <span>Rate Card</span>
+          <span class="mono">
+            {{ ratesVersion || '—' }}<span v-if="ratesUpdated" class="rates-updated"> · {{ ratesUpdated }}</span>
+          </span>
         </div>
       </section>
 
@@ -64,12 +93,16 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
 import { useSettingsStore } from '../stores/settings'
+import { useRates } from '../composables/useRates'
 import Toggle from '../components/primitives/Toggle.vue'
+import WindowSync from '../components/domain/WindowSync.vue'
 
 const store = useSettingsStore()
+const { version: ratesVersion, updated: ratesUpdated, load: loadRates } = useRates()
 
 onMounted(() => {
   store.load()
+  loadRates()
 })
 </script>
 
@@ -106,6 +139,25 @@ onMounted(() => {
   padding-bottom: var(--space-2);
   border-bottom: 1px solid var(--border-subtle);
 }
+.section-help {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  margin: 0;
+  max-width: 60ch;
+}
+.plan-select {
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-default);
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  max-width: 240px;
+}
+.plan-select:hover { border-color: var(--amber-500); }
+.plan-select:focus { outline: none; border-color: var(--amber-500); }
 .field {
   display: flex;
   flex-direction: column;
@@ -169,6 +221,9 @@ onMounted(() => {
   font-family: 'JetBrains Mono', monospace;
   font-size: 12px;
   color: var(--text-tertiary);
+}
+.about-grid .rates-updated {
+  color: var(--text-disabled);
 }
 
 .actions {

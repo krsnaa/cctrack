@@ -1,0 +1,279 @@
+<template>
+  <div class="window-bars">
+    <div class="window-bar" v-for="(w, i) in bars" :key="i">
+      <div class="window-bar-head">
+        <span class="window-bar-title">{{ w.title }}</span>
+        <span class="window-bar-meta">
+          <span v-if="w.hasDenom" class="usage-pct">{{ w.usagePct.toFixed(1) }}%</span>
+          <template v-if="w.paceText">
+            <span v-if="w.hasDenom" class="sep">·</span>
+            <span :class="['pace', w.paceClass]">{{ w.paceText }}</span>
+          </template>
+          <span class="sep">·</span>
+          <span class="remaining">{{ w.remaining }} left</span>
+        </span>
+      </div>
+      <div class="window-bar-track" :title="w.tooltip">
+        <!-- Usage fill: cost as a fraction of cap (or prev-window cost when
+             no cap is known). Clamped to 100% visually; actual % in pace. -->
+        <div class="window-bar-fill" :style="{ width: w.usageWidth + '%' }"></div>
+        <!-- Time marker: where we are in the window's clock. Sliding white
+             line; if fill is to its right, you're over pace, and vice versa. -->
+        <div class="window-bar-marker" :style="{ left: w.timePct + '%' }"></div>
+      </div>
+      <div class="window-bar-resets">
+        <span>Resets {{ w.resetsAt }}</span>
+        <span v-if="w.syncedLabel" class="sep">·</span>
+        <span v-if="w.syncedLabel" :class="['synced', { stale: w.syncStale }]">
+          synced {{ w.syncedLabel }}
+        </span>
+        <span class="sep">·</span>
+        <RouterLink to="/settings" class="resync-link">re-sync</RouterLink>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { computed } from 'vue'
+import { RouterLink } from 'vue-router'
+import type { WindowBucket } from '../../types'
+
+const props = defineProps<{
+  fiveHour: WindowBucket | null
+  sevenDay: WindowBucket | null
+}>()
+
+function pctElapsed(start: string, end: string): number {
+  if (!start || !end) return 0
+  const s = new Date(start).getTime()
+  const e = new Date(end).getTime()
+  const now = Date.now()
+  if (e <= s) return 0
+  return Math.max(0, Math.min(100, ((now - s) / (e - s)) * 100))
+}
+
+function remainingLabel(end: string): string {
+  if (!end) return '—'
+  const ms = new Date(end).getTime() - Date.now()
+  if (ms <= 0) return 'expired'
+  const totalMin = Math.floor(ms / 60000)
+  const days = Math.floor(totalMin / (24 * 60))
+  const hours = Math.floor((totalMin % (24 * 60)) / 60)
+  const minutes = totalMin % 60
+  if (days > 0) return `${days}d ${hours}h`
+  if (hours > 0) return `${hours}h ${minutes}m`
+  return `${minutes}m`
+}
+
+function fmtRange(start: string, end: string): string {
+  if (!start || !end) return ''
+  const s = new Date(start)
+  const e = new Date(end)
+  const opts: Intl.DateTimeFormatOptions = {
+    weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
+  }
+  return `${s.toLocaleString('en-GB', opts)} → ${e.toLocaleString('en-GB', opts)}`
+}
+
+interface Bar {
+  title: string
+  timePct: number
+  usagePct: number   // actual ratio (can exceed 100%)
+  usageWidth: number // clamped 0-100 for rendering
+  hasDenom: boolean  // true when cap or prev_cost give us a real denominator
+  paceText: string
+  paceClass: string  // 'over', 'under', or '' for neutral / no-pace
+  remaining: string
+  resetsAt: string   // human-readable absolute reset moment, e.g. "Tue 03:00"
+  tooltip: string
+  syncedLabel: string // "4h ago", or "" if never synced
+  syncStale: boolean  // sync older than the window's own duration
+}
+
+function fmtResetMoment(end: string, longHorizon: boolean): string {
+  if (!end) return '—'
+  const d = new Date(end)
+  if (longHorizon) {
+    // Weekly window: surface day-of-week + time so the reset is recognizable
+    // ("Resets Tue 03:00") without parsing a duration.
+    return d.toLocaleString('en-GB', {
+      weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false,
+    })
+  }
+  // 5h window: same calendar day usually, just the time of day.
+  return d.toLocaleString('en-GB', {
+    hour: '2-digit', minute: '2-digit', hour12: false,
+  })
+}
+
+function syncAgeLabel(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const ms = Date.now() - new Date(iso).getTime()
+  if (ms < 0 || Number.isNaN(ms)) return ''
+  const m = Math.floor(ms / 60000)
+  if (m < 1) return 'just now'
+  if (m < 60) return `${m}m ago`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h ago`
+  const d = Math.floor(h / 24)
+  return `${d}d ago`
+}
+
+function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): Bar | null {
+  if (!w?.start) return null
+  const timePct = Math.round(pctElapsed(w.start, w.end) * 10) / 10
+  const remaining = remainingLabel(w.end)
+  const resetsAt = fmtResetMoment(w.end, longHorizon)
+  const syncedLabel = syncAgeLabel(w.last_synced_at)
+  // "Stale" = sync is older than this window's own duration. A 5h sync from
+  // 6h ago has cycled at least once in reality, so the displayed end-time is
+  // very likely past Anthropic's actual reset.
+  const windowMs = new Date(w.end).getTime() - new Date(w.start).getTime()
+  const syncMs = w.last_synced_at ? Date.now() - new Date(w.last_synced_at).getTime() : 0
+  const syncStale = !!w.last_synced_at && syncMs > windowMs
+
+  // Denominator preference: cap (synced from claude.ai) > prev_cost (cascade
+  // fallback). The cap is plan-level, so it survives anchor expiry and gives
+  // a stable cap-relative fill that mirrors what claude.ai shows.
+  const denom = w.cap && w.cap > 0 ? w.cap : (w.prev_cost > 0 ? w.prev_cost : 0)
+  const mode = w.cap && w.cap > 0 ? 'cap' : (w.prev_cost > 0 ? 'prev' : 'none')
+  const baseTooltip = fmtRange(w.start, w.end)
+  const tooltip = mode === 'cap'
+    ? `${baseTooltip}\n$${w.cost.toFixed(2)} of $${(w.cap as number).toFixed(2)} cap`
+    : mode === 'prev'
+      ? `${baseTooltip}\n$${w.cost.toFixed(2)} this window · $${w.prev_cost.toFixed(2)} previous`
+      : baseTooltip
+
+  if (denom <= 0) {
+    return {
+      title, timePct, usagePct: 0, usageWidth: 0, hasDenom: false,
+      paceText: 'sync to enable', paceClass: '',
+      remaining, resetsAt, tooltip, syncedLabel, syncStale,
+    }
+  }
+  const usagePct = (w.cost / denom) * 100
+  const usageWidth = Math.max(0, Math.min(100, usagePct))
+  // Pace = how far ahead/behind the time marker the usage fill is. Same metric
+  // for both directions; sign tells us which.
+  const delta = usagePct - timePct
+  const sign = delta > 0 ? '+' : ''
+  const paceClass = delta > 5 ? 'over' : delta < -5 ? 'under' : ''
+  const paceText = `${sign}${Math.round(delta)}% pace`
+  return {
+    title, timePct, usagePct, usageWidth, hasDenom: true, paceText, paceClass,
+    remaining, resetsAt, tooltip, syncedLabel, syncStale,
+  }
+}
+
+const bars = computed(() => {
+  const out: Bar[] = []
+  const a = buildBar('5h Window', props.fiveHour, false)
+  if (a) out.push(a)
+  const b = buildBar('7d Window', props.sevenDay, true)
+  if (b) out.push(b)
+  return out
+})
+</script>
+
+<style scoped>
+.window-bars {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--space-5);
+  margin-bottom: var(--space-6);
+  animation: fadeSlideUp 0.4s ease both;
+}
+.window-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.window-bar-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+}
+.window-bar-title {
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--text-tertiary);
+  font-weight: 500;
+  font-size: 10.5px;
+}
+.window-bar-meta {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.window-bar-meta .sep {
+  color: var(--text-disabled);
+}
+.window-bar-meta .usage-pct { color: var(--text-primary); }
+.window-bar-meta .pace.over { color: var(--cost-high); }
+.window-bar-meta .pace.under { color: #4ade80; }
+.window-bar-meta .pace { color: var(--text-tertiary); }
+.window-bar-meta .remaining { color: var(--text-tertiary); }
+
+.window-bar-track {
+  position: relative;
+  height: 10px;
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  overflow: hidden;
+}
+.window-bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--amber-500);
+  transition: width 600ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+/* Time marker: a high-contrast vertical line that slides across the track.
+   The eye reads "fill behind marker = under pace" / "fill past marker = over
+   pace" without needing the numeric label. */
+.window-bar-marker {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 3px;
+  background: var(--text-primary);
+  transform: translateX(-1.5px);
+  box-shadow: 0 0 0 1px var(--bg-base);
+  transition: left 600ms cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 1;
+}
+.window-bar-resets {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: var(--text-disabled);
+  margin-top: 2px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.window-bar-resets .sep {
+  color: var(--border-subtle);
+}
+.window-bar-resets .synced {
+  color: var(--text-tertiary);
+}
+.window-bar-resets .synced.stale {
+  color: var(--cost-high);
+}
+.resync-link {
+  color: var(--text-tertiary);
+  text-decoration: underline;
+  text-decoration-color: var(--border-default);
+  text-underline-offset: 2px;
+  transition: color 120ms;
+}
+.resync-link:hover {
+  color: var(--amber-400);
+}
+</style>

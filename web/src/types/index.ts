@@ -12,13 +12,35 @@ export interface CostBreakdown {
 
 export interface Trends {
   prev_day_cost: number
-  prev_week_cost: number
   prev_month_cost: number
 }
 
+export interface WindowBucket {
+  start: string
+  end: string
+  cost: number
+  tokens: number
+  request_count: number
+  prev_cost: number
+  prev_start: string
+  cap?: number | null
+  last_synced_at?: string | null
+}
+
+export interface WindowAnchor {
+  id: number
+  synced_at: string
+  window_type: '5h' | '7d'
+  time_left_minutes: number
+  anthropic_pct?: number | null
+  observed_cost: number
+  inferred_cap?: number | null
+}
+
 export interface Summary {
+  window_5h: WindowBucket
   today: SpendBucket
-  week: SpendBucket
+  window_7d: WindowBucket
   month: SpendBucket
   projected: number
   tokens: {
@@ -27,7 +49,6 @@ export interface Summary {
     cache_read: number
     cache_write: number
   }
-  cost_breakdown: CostBreakdown
   trends: Trends
   budget: number
 }
@@ -54,7 +75,9 @@ export interface RequestRecord {
   input_tokens: number
   output_tokens: number
   cache_read_tokens: number
-  cache_write_tokens: number
+  cache_write_5m_tokens: number
+  cache_write_1h_tokens: number
+  cache_write_tokens: number // derived: 5m + 1h
   cost: number
 }
 
@@ -68,7 +91,9 @@ export interface Session {
   total_input: number
   total_output: number
   total_cache_read: number
-  total_cache_write: number
+  total_cache_write_5m: number
+  total_cache_write_1h: number
+  total_cache_write: number // derived: 5m + 1h
   total_cost: number
 }
 
@@ -82,6 +107,23 @@ export interface SessionsResponse {
   total: number
   limit: number
   offset: number
+  date?: string
+  project?: string
+}
+
+export interface ProjectGroup {
+  project: string
+  session_count: number
+  total_cost: number
+  total_tokens: number
+  started_at: string
+  last_activity: string
+}
+
+export interface ProjectGroupsResponse {
+  groups: ProjectGroup[]
+  total: number
+  date?: string
 }
 
 export interface Settings {
@@ -90,14 +132,23 @@ export interface Settings {
   port: number
   monthly_budget_usd: number
   open_browser_on_serve: boolean
+  claude_plan: string
 }
 
 export interface ModelRate {
   Family: string
+  Released: string
   InputPerMToken: number
   OutputPerMToken: number
   CacheReadPerMToken: number
-  CacheWritePerMToken: number
+  CacheWrite5mPerMToken: number
+  CacheWrite1hPerMToken: number
+}
+
+export interface RatesResponse {
+  version: string
+  updated: string
+  rates: ModelRate[]
 }
 
 export interface ProjectSummary {

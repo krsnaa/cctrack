@@ -17,11 +17,24 @@ export function formatTokensRaw(n: number): string {
   return n.toLocaleString()
 }
 
+// Render a canonical model id (e.g. "claude-opus-4-7-20251020") as
+// "Opus 4.7": strip the trailing date suffix and reuse the family
+// formatter so version digits join with dots, not spaces.
 export function formatModel(model: string): string {
-  return model
-    .replace('claude-', '')
-    .replace(/-\d{8}$/, '')
-    .replace(/-/g, ' ')
+  return formatFamily(model.replace(/-\d{8}$/, ''))
+}
+
+// Render a canonical Family string (e.g. "claude-opus-4-7") as a human-readable
+// "Opus 4.7" — capitalize the model name and join the remaining numeric segments
+// with dots so version numbers read naturally.
+export function formatFamily(family: string): string {
+  if (!family) return ''
+  const stripped = family.replace(/^claude-/, '').replace(/^anthropic-/, '')
+  const segments = stripped.split('-')
+  if (!segments.length || !segments[0]) return family
+  const name = segments[0].charAt(0).toUpperCase() + segments[0].slice(1)
+  const versionParts = segments.slice(1).filter(s => /^\d+$/.test(s))
+  return versionParts.length ? `${name} ${versionParts.join('.')}` : name
 }
 
 export function formatDate(iso: string): string {

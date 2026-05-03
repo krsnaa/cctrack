@@ -1,27 +1,62 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { Session } from '../types'
-import { fetchSessions, fetchSession } from '../api'
+import type { Session, ProjectGroup } from '../types'
+import { fetchSessions, fetchSessionsGrouped, fetchSession } from '../api'
 
+// Sessions view shows projects grouped by working directory. Children expand
+// inline on demand and are cached per-project so collapsing/re-expanding is
+// instant. The same date filter applies to both levels of the view.
 export const useSessionsStore = defineStore('sessions', () => {
-  const sessions = ref<Session[]>([])
+  const groups = ref<ProjectGroup[]>([])
   const total = ref(0)
-  const limit = ref(25)
-  const offset = ref(0)
-  const sortBy = ref('cost')
+  const sortBy = ref('date')
   const sortDir = ref<'asc' | 'desc'>('desc')
+  const dateFilter = ref('') // YYYY-MM-DD (local day) or '' for no filter
+
+  const expanded = ref<Set<string>>(new Set())
+  const childSessions = ref<Map<string, Session[]>>(new Map())
+  const childLoading = ref<Set<string>>(new Set())
+
   const selectedSession = ref<Session | null>(null)
   const loading = ref(false)
 
-  async function load() {
+  async function loadGroups() {
     loading.value = true
     try {
-      const res = await fetchSessions(limit.value, offset.value, sortBy.value, sortDir.value)
-      sessions.value = res.sessions || []
+      const res = await fetchSessionsGrouped(sortBy.value, sortDir.value, dateFilter.value)
+      groups.value = res.groups || []
       total.value = res.total
+      // Filter changes invalidate the per-project cache because the child set
+      // depends on the date filter too.
+      childSessions.value = new Map()
     } finally {
       loading.value = false
     }
+  }
+
+  async function loadChildren(project: string) {
+    if (childSessions.value.has(project) || childLoading.value.has(project)) return
+    childLoading.value.add(project)
+    try {
+      // Pull all sessions for this project in the current date slice. The
+      // backend default limit is 25; widen so a heavy project shows them all
+      // without inner pagination on the expanded section.
+      const res = await fetchSessions(500, 0, 'date', 'desc', dateFilter.value, project)
+      childSessions.value = new Map(childSessions.value).set(project, res.sessions || [])
+    } finally {
+      childLoading.value.delete(project)
+    }
+  }
+
+  function toggleExpand(project: string) {
+    const next = new Set(expanded.value)
+    if (next.has(project)) {
+      next.delete(project)
+    } else {
+      next.add(project)
+      loadChildren(project)
+    }
+    expanded.value = next
   }
 
   function setSort(col: string) {
@@ -31,22 +66,13 @@ export const useSessionsStore = defineStore('sessions', () => {
       sortBy.value = col
       sortDir.value = 'desc'
     }
-    offset.value = 0
-    load()
+    loadGroups()
   }
 
-  function nextPage() {
-    if (offset.value + limit.value < total.value) {
-      offset.value += limit.value
-      load()
-    }
-  }
-
-  function prevPage() {
-    if (offset.value > 0) {
-      offset.value = Math.max(0, offset.value - limit.value)
-      load()
-    }
+  function setDateFilter(date: string) {
+    dateFilter.value = date
+    expanded.value = new Set()
+    loadGroups()
   }
 
   async function selectSession(id: string) {
@@ -58,8 +84,10 @@ export const useSessionsStore = defineStore('sessions', () => {
   }
 
   return {
-    sessions, total, limit, offset, sortBy, sortDir,
+    groups, total, sortBy, sortDir, dateFilter,
+    expanded, childSessions, childLoading,
     selectedSession, loading,
-    load, setSort, nextPage, prevPage, selectSession, clearSelection,
+    loadGroups, loadChildren, toggleExpand,
+    setSort, setDateFilter, selectSession, clearSelection,
   }
 })

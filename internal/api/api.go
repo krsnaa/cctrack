@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/ksred/cctrack/internal/calculator"
@@ -26,6 +27,9 @@ func New(s *store.Store, h *hub.Hub, cfg *config.Config) *API {
 func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/summary", a.handleSummary)
 	mux.HandleFunc("GET /api/v1/sessions", a.handleSessions)
+	mux.HandleFunc("GET /api/v1/sessions/grouped", a.handleSessionsGrouped)
+	mux.HandleFunc("POST /api/v1/window-anchors", a.handlePostWindowAnchor)
+	mux.HandleFunc("GET /api/v1/window-anchors", a.handleListWindowAnchors)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", a.handleSession)
 	mux.HandleFunc("GET /api/v1/recent", a.handleRecent)
 	mux.HandleFunc("GET /api/v1/daily", a.handleDaily)
@@ -33,6 +37,8 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /api/v1/settings", a.handlePostSettings)
 	mux.HandleFunc("GET /api/v1/projects", a.handleProjects)
 	mux.HandleFunc("GET /api/v1/projects/monthly", a.handleProjectMonthly)
+	mux.HandleFunc("GET /api/v1/projects/spend", a.handleProjectsSpend)
+	mux.HandleFunc("GET /api/v1/cost-breakdown", a.handleCostBreakdown)
 	mux.HandleFunc("GET /api/v1/rates", a.handleRates)
 	mux.HandleFunc("GET /api/v1/models", a.handleModels)
 	mux.HandleFunc("GET /api/v1/heatmap", a.handleHeatmap)
@@ -53,12 +59,6 @@ func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	costBreakdown, err := a.store.GetCostBreakdown()
-	if err != nil {
-		http.Error(w, err.Error(), 500)
-		return
-	}
-
 	trends, err := a.store.GetTrends()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
@@ -66,8 +66,9 @@ func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := map[string]any{
+		"window_5h": summary.Window5h,
 		"today":     summary.Today,
-		"week":      summary.Week,
+		"window_7d": summary.Window7d,
 		"month":     summary.Month,
 		"projected": summary.Projected,
 		"tokens": map[string]int64{
@@ -76,7 +77,6 @@ func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
 			"cache_read":  cacheRead,
 			"cache_write": cacheWrite,
 		},
-		"cost_breakdown": costBreakdown,
 		"trends":         trends,
 		"budget":         a.cfg.MonthlyBudgetUSD,
 	}
@@ -94,8 +94,10 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 	if dir == "" {
 		dir = "desc"
 	}
+	date := r.URL.Query().Get("date")       // YYYY-MM-DD (local day) or empty
+	project := r.URL.Query().Get("project") // exact project match or empty
 
-	sessions, total, err := a.store.ListSessions(limit, offset, sort, dir)
+	sessions, total, err := a.store.ListSessions(limit, offset, sort, dir, date, project)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -106,6 +108,103 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		"total":    total,
 		"limit":    limit,
 		"offset":   offset,
+		"date":     date,
+		"project":  project,
+	})
+}
+
+func (a *API) handlePostWindowAnchor(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		WindowType      string   `json:"window_type"`
+		TimeLeftMinutes int      `json:"time_left_minutes"`
+		AnthropicPct    *float64 `json:"anthropic_pct,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON", 400)
+		return
+	}
+	if body.WindowType != "5h" && body.WindowType != "7d" {
+		http.Error(w, "window_type must be '5h' or '7d'", 400)
+		return
+	}
+	if body.TimeLeftMinutes < 0 {
+		http.Error(w, "time_left_minutes must be >= 0", 400)
+		return
+	}
+
+	// Compute observed_cost over the window the *user is describing*, not
+	// cctrack's cascading detection. The cascading detector picks its own
+	// window boundaries from the request stream, which can diverge from
+	// Anthropic's actual window — so dividing the wrong cost by the user's
+	// pct yields a wildly wrong cap (off by a factor of 5–50× in practice).
+	// Anchored bounds: [now-(duration-time_left), now].
+	duration := 5 * time.Hour
+	if body.WindowType == "7d" {
+		duration = 7 * 24 * time.Hour
+	}
+	now := time.Now()
+	anchoredEnd := now.Add(time.Duration(body.TimeLeftMinutes) * time.Minute)
+	windowStart := anchoredEnd.Add(-duration)
+	observed, err := a.store.CostInRange(windowStart, now)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	anchor := store.WindowAnchor{
+		WindowType:      body.WindowType,
+		TimeLeftMinutes: body.TimeLeftMinutes,
+		AnthropicPct:    body.AnthropicPct,
+		ObservedCost:    observed,
+	}
+	id, err := a.store.SaveWindowAnchor(anchor)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	saved, _ := a.store.GetLatestAnchor(body.WindowType)
+	writeJSON(w, map[string]any{
+		"id":     id,
+		"anchor": saved,
+	})
+}
+
+func (a *API) handleListWindowAnchors(w http.ResponseWriter, r *http.Request) {
+	wt := r.URL.Query().Get("type")
+	limit := queryInt(r, "limit", 50)
+	if wt != "5h" && wt != "7d" {
+		http.Error(w, "type must be '5h' or '7d'", 400)
+		return
+	}
+	rows, err := a.store.ListAnchors(wt, limit)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]any{"anchors": rows})
+}
+
+func (a *API) handleSessionsGrouped(w http.ResponseWriter, r *http.Request) {
+	sort := r.URL.Query().Get("sort")
+	if sort == "" {
+		sort = "date"
+	}
+	dir := r.URL.Query().Get("dir")
+	if dir == "" {
+		dir = "desc"
+	}
+	date := r.URL.Query().Get("date") // YYYY-MM-DD (local day) or empty
+
+	groups, err := a.store.GetProjectGroups(date, sort, dir)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	writeJSON(w, map[string]any{
+		"groups": groups,
+		"total":  len(groups),
+		"date":   date,
 	})
 }
 
@@ -148,6 +247,7 @@ func (a *API) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 		MonthlyBudgetUSD   *float64 `json:"monthly_budget_usd"`
 		OpenBrowserOnServe *bool    `json:"open_browser_on_serve"`
 		LogDir             *string  `json:"log_dir"`
+		ClaudePlan         *string  `json:"claude_plan"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
 		http.Error(w, "invalid JSON", 400)
@@ -162,6 +262,9 @@ func (a *API) handlePostSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	if updates.LogDir != nil {
 		a.cfg.LogDir = *updates.LogDir
+	}
+	if updates.ClaudePlan != nil {
+		a.cfg.ClaudePlan = *updates.ClaudePlan
 	}
 
 	if err := a.cfg.Save(); err != nil {
@@ -189,12 +292,49 @@ func (a *API) handleProjectMonthly(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, data)
 }
 
+func (a *API) handleProjectsSpend(w http.ResponseWriter, r *http.Request) {
+	bounds, err := store.ParseRange(r.URL.Query().Get("range"))
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	data, err := a.store.GetProjectsSpendInRange(bounds)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, data)
+}
+
+func (a *API) handleCostBreakdown(w http.ResponseWriter, r *http.Request) {
+	bounds, err := store.ParseRange(r.URL.Query().Get("range"))
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	data, err := a.store.GetCostBreakdownInRange(bounds)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, data)
+}
+
 func (a *API) handleRates(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, calculator.Rates)
+	writeJSON(w, map[string]any{
+		"version": calculator.RatesVersion,
+		"updated": calculator.RatesUpdated,
+		"rates":   calculator.Rates,
+	})
 }
 
 func (a *API) handleModels(w http.ResponseWriter, r *http.Request) {
-	models, err := a.store.GetModelBreakdown()
+	bounds, err := store.ParseRange(r.URL.Query().Get("range"))
+	if err != nil {
+		http.Error(w, err.Error(), 400)
+		return
+	}
+	models, err := a.store.GetModelBreakdownInRange(bounds)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return

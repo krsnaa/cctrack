@@ -1,16 +1,21 @@
 <template>
   <div class="donut-card">
     <div class="chart-header">
-      <div class="chart-title">Cost Breakdown</div>
+      <div class="chart-title-row">
+        <div class="chart-title">{{ title }}</div>
+        <slot name="header-action" />
+      </div>
+      <div v-if="subtitle" class="chart-subtitle">{{ subtitle }}</div>
     </div>
-    <div class="donut-wrap">
-      <Doughnut v-if="chartData" :data="chartData" :options="chartOptions" />
+    <div v-if="hasData" class="donut-wrap">
+      <Doughnut :data="chartData" :options="chartOptions" />
     </div>
-    <div class="donut-legend">
+    <div v-else class="donut-empty">{{ emptyText || '—' }}</div>
+    <div v-if="hasData" class="donut-legend">
       <div v-for="(item, i) in legendItems" :key="i" class="legend-row">
         <div class="legend-left">
           <div class="legend-dot" :style="{ background: item.color }"></div>
-          <span>{{ item.label }}</span>
+          <span class="legend-label" :title="item.label">{{ item.label }}</span>
         </div>
         <div class="legend-val">{{ formatCostDisplay(item.value) }} <span class="legend-pct">{{ item.pct }}%</span></div>
       </div>
@@ -30,36 +35,34 @@ import { formatCostDisplay } from '../../composables/useFormatCost'
 
 ChartJS.register(ArcElement, Tooltip)
 
+export interface DonutSlice {
+  label: string
+  value: number
+  color: string
+}
+
 const props = defineProps<{
-  inputCost: number
-  outputCost: number
-  cacheReadCost: number
-  cacheWriteCost: number
+  title: string
+  subtitle?: string
+  slices: DonutSlice[]
+  emptyText?: string
 }>()
 
-const segments = computed(() => [
-  { label: 'Input', value: props.inputCost, color: '#f59e0b' },
-  { label: 'Output', value: props.outputCost, color: '#fbbf24' },
-  { label: 'Cache Read', value: props.cacheReadCost, color: '#78716c' },
-  { label: 'Cache Write', value: props.cacheWriteCost, color: '#44403c' },
-])
-
-const total = computed(() =>
-  props.inputCost + props.outputCost + props.cacheReadCost + props.cacheWriteCost
-)
+const total = computed(() => props.slices.reduce((s, x) => s + x.value, 0))
+const hasData = computed(() => total.value > 0)
 
 const legendItems = computed(() =>
-  segments.value.map(s => ({
+  props.slices.map(s => ({
     ...s,
     pct: total.value > 0 ? Math.round((s.value / total.value) * 100) : 0,
-  }))
+  })),
 )
 
 const chartData = computed(() => ({
-  labels: segments.value.map(s => s.label),
+  labels: props.slices.map(s => s.label),
   datasets: [{
-    data: segments.value.map(s => s.value),
-    backgroundColor: segments.value.map(s => s.color),
+    data: props.slices.map(s => s.value),
+    backgroundColor: props.slices.map(s => s.color),
     borderColor: '#0a0a09',
     borderWidth: 3,
     hoverBorderColor: '#0a0a09',
@@ -107,6 +110,12 @@ const chartOptions = {
 .chart-header {
   margin-bottom: var(--space-5);
 }
+.chart-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
 .chart-title {
   font-size: 11px;
   font-weight: 500;
@@ -114,9 +123,25 @@ const chartOptions = {
   text-transform: uppercase;
   color: var(--text-tertiary);
 }
+.chart-subtitle {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10.5px;
+  color: var(--text-disabled);
+  margin-top: 4px;
+}
 .donut-wrap {
   height: 150px;
   position: relative;
+  margin-bottom: var(--space-5);
+}
+.donut-empty {
+  height: 150px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-disabled);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
   margin-bottom: var(--space-5);
 }
 .donut-legend {
@@ -129,12 +154,19 @@ const chartOptions = {
   align-items: center;
   justify-content: space-between;
   font-size: 12px;
+  gap: var(--space-3);
 }
 .legend-left {
   display: flex;
   align-items: center;
   gap: var(--space-2);
   color: var(--text-secondary);
+  min-width: 0;
+}
+.legend-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .legend-dot {
   width: 6px;
@@ -146,6 +178,7 @@ const chartOptions = {
   font-family: 'JetBrains Mono', monospace;
   font-size: 11px;
   color: var(--text-tertiary);
+  flex-shrink: 0;
 }
 .legend-pct {
   color: var(--text-disabled);

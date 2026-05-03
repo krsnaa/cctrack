@@ -1,24 +1,23 @@
 import { defineStore } from 'pinia'
 import { ref } from 'vue'
-import type { Summary, Session, DailySpend, WsEvent } from '../types'
-import { fetchSummary, fetchDaily, fetchRecent, fetchSessions } from '../api'
+import type { Summary, Session, WsEvent } from '../types'
+import { fetchSummary, fetchRecent, fetchSessions } from '../api'
 
 export const useDashboardStore = defineStore('dashboard', () => {
   const summary = ref<Summary | null>(null)
-  const daily = ref<DailySpend[]>([])
   const recentSessions = ref<Session[]>([])
   const topSessions = ref<Session[]>([])
   const loaded = ref(false)
 
+  // Daily spend is owned by DailySpendChart itself so it can refetch when the
+  // user changes the time-range dropdown without going through the store.
   async function load() {
-    const [s, d, recent, top] = await Promise.all([
+    const [s, recent, top] = await Promise.all([
       fetchSummary(),
-      fetchDaily(30),
       fetchRecent(10),
       fetchSessions(5, 0, 'cost', 'desc'),
     ])
     summary.value = s
-    daily.value = d
     recentSessions.value = recent || []
     topSessions.value = top.sessions || []
     loaded.value = true
@@ -64,5 +63,5 @@ export const useDashboardStore = defineStore('dashboard', () => {
     }
   }
 
-  return { summary, daily, recentSessions, topSessions, loaded, load, applyEvent }
+  return { summary, recentSessions, topSessions, loaded, load, applyEvent }
 })

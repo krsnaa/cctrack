@@ -5,85 +5,136 @@
       <div class="page-date">{{ currentDate }}</div>
     </div>
 
+    <WindowBars
+      v-if="store.summary"
+      :fiveHour="store.summary.window_5h"
+      :sevenDay="store.summary.window_7d"
+    />
+
     <div class="stat-grid" v-if="store.summary">
       <StatCard
-        label="Today"
+        label="5h Window"
+        :value="store.summary.window_5h?.cost ?? 0"
+        :tokens="store.summary.window_5h?.tokens ?? 0"
+        :highlight="true"
+        :trendPct="window5hTrend"
+        trendLabel="prev 5h"
+        :prevAmount="store.summary.window_5h?.prev_cost"
+      />
+      <StatCard
+        :label="todayLabel"
         :value="store.summary.today.cost"
         :tokens="store.summary.today.tokens"
-        :highlight="true"
-        :budget="store.summary.budget"
         :trendPct="dayTrend"
-        trendLabel="yesterday"
+        :prevName="yesterdayLabel"
+        :prevAmount="store.summary.trends?.prev_day_cost"
       />
       <StatCard
-        label="This Week"
-        :value="store.summary.week.cost"
-        :tokens="store.summary.week.tokens"
-        :trendPct="weekTrend"
-        trendLabel="prev week"
+        label="7d Window"
+        :value="store.summary.window_7d?.cost ?? 0"
+        :tokens="store.summary.window_7d?.tokens ?? 0"
+        :trendPct="window7dTrend"
+        trendLabel="prev 7d"
+        :prevAmount="store.summary.window_7d?.prev_cost"
       />
       <StatCard
-        label="This Month"
+        :label="monthLabel"
         :value="store.summary.month.cost"
         :tokens="store.summary.month.tokens"
+        :budget="store.summary.budget"
         :trendPct="monthTrend"
-        trendLabel="prev month"
+        :prevName="prevMonthName"
+        :prevAmount="store.summary.trends?.prev_month_cost"
       />
+    </div>
+
+    <div class="charts-row" v-if="store.summary">
+      <DailySpendChart />
       <StatCard
+        class="projected-slot"
         label="Projected"
         :value="store.summary.projected"
         subtext="est. this month"
       />
     </div>
 
-    <div class="charts-row" v-if="store.summary">
-      <DailySpendChart :data="store.daily" />
-      <TokenDonut
-        v-if="store.summary.cost_breakdown"
-        :inputCost="store.summary.cost_breakdown.input_cost"
-        :outputCost="store.summary.cost_breakdown.output_cost"
-        :cacheReadCost="store.summary.cost_breakdown.cache_read_cost"
-        :cacheWriteCost="store.summary.cost_breakdown.cache_write_cost"
-      />
+    <!-- Model breakdown + two donuts (cost-by-type, projects-by-spend) -->
+    <div class="insights-row" v-if="models.length || costBreakdownSlices.length">
+      <ModelBreakdown :models="models">
+        <template #header-action>
+          <TimeRangeSelect v-model="modelsRange" />
+        </template>
+      </ModelBreakdown>
+      <Donut
+        title="Cost Breakdown"
+        :slices="costBreakdownSlices"
+      >
+        <template #header-action>
+          <TimeRangeSelect v-model="costRange" />
+        </template>
+      </Donut>
+      <Donut
+        title="Spend by Project"
+        :slices="projectSpendSlices"
+        emptyText="No spend in this range"
+      >
+        <template #header-action>
+          <TimeRangeSelect v-model="projectsRange" />
+        </template>
+      </Donut>
     </div>
 
-    <!-- Model Breakdown + Heatmap row -->
-    <div class="insights-row" v-if="models.length || heatmap.length">
-      <ModelBreakdown :models="models" />
+    <!-- Activity heatmap on its own row so the wider canvas reads clearly -->
+    <div class="heatmap-row" v-if="heatmap.length">
       <ActivityHeatmap :cells="heatmap" />
     </div>
 
-    <div class="section-header" v-if="store.recentSessions.length">
+    <div class="section-header" v-if="recentGroups.length">
       <div class="section-title">Recent Sessions</div>
       <router-link class="view-all" to="/sessions">View all →</router-link>
     </div>
 
-    <div class="sessions-table-wrap" v-if="store.recentSessions.length">
+    <div class="sessions-table-wrap" v-if="recentGroups.length">
       <table>
         <thead>
           <tr>
-            <th style="width:40px">#</th>
-            <th>Session</th>
-            <th>Model</th>
+            <th style="width:40px"></th>
+            <th>Project</th>
+            <th>Started</th>
             <th>Last Active</th>
             <th class="right">Tokens</th>
             <th class="right">Cost</th>
           </tr>
         </thead>
         <tbody>
-          <SessionRow
-            v-for="(session, i) in store.recentSessions"
-            :key="session.id"
-            :session="session"
-            :rank="i + 1"
-            @select="openSession"
-          />
+          <template v-for="group in recentGroups" :key="group.project">
+            <ProjectGroupRow
+              :group="group"
+              :expanded="sessionsStore.expanded.has(group.project)"
+              @toggle="sessionsStore.toggleExpand"
+            />
+            <template v-if="sessionsStore.expanded.has(group.project)">
+              <tr v-if="sessionsStore.childLoading.has(group.project)" class="loading-row">
+                <td></td>
+                <td colspan="5">Loading sessions…</td>
+              </tr>
+              <SessionRow
+                v-for="(session, i) in (sessionsStore.childSessions.get(group.project) || [])"
+                :key="session.id"
+                :session="session"
+                :rank="i + 1"
+                show-started
+                subordinate
+                @select="openSession"
+              />
+            </template>
+          </template>
         </tbody>
       </table>
     </div>
 
     <div class="section-header top-section" v-if="store.topSessions.length">
-      <div class="section-title">Most Expensive</div>
+      <div class="section-title">Most Expensive Sessions</div>
     </div>
 
     <div class="sessions-table-wrap" v-if="store.topSessions.length">
@@ -92,7 +143,6 @@
           <tr>
             <th style="width:40px">#</th>
             <th>Session</th>
-            <th>Model</th>
             <th>Last Active</th>
             <th class="right">Tokens</th>
             <th class="right">Cost</th>
@@ -117,23 +167,40 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, watch } from 'vue'
 import { useDashboardStore } from '../stores/dashboard'
+import { useSessionsStore } from '../stores/sessions'
 import StatCard from '../components/primitives/StatCard.vue'
 import DailySpendChart from '../components/charts/DailySpendChart.vue'
-import TokenDonut from '../components/charts/TokenDonut.vue'
+import Donut from '../components/charts/Donut.vue'
 import ModelBreakdown from '../components/charts/ModelBreakdown.vue'
 import ActivityHeatmap from '../components/charts/ActivityHeatmap.vue'
+import WindowBars from '../components/charts/WindowBars.vue'
 import SessionRow from '../components/domain/SessionRow.vue'
+import ProjectGroupRow from '../components/domain/ProjectGroupRow.vue'
 import SessionDetail from '../components/domain/SessionDetail.vue'
 import SlideOver from '../components/primitives/SlideOver.vue'
-import type { Session, ModelSummary, HeatmapCell } from '../types'
-import { fetchSession, fetchModels, fetchHeatmap } from '../api'
+import TimeRangeSelect, { type TimeRange } from '../components/primitives/TimeRangeSelect.vue'
+import type { Session, ModelSummary, HeatmapCell, ProjectMonthly, CostBreakdown } from '../types'
+import { fetchSession, fetchModels, fetchHeatmap, fetchProjectsSpend, fetchCostBreakdown } from '../api'
 
 const store = useDashboardStore()
+const sessionsStore = useSessionsStore()
 const selectedSession = ref<Session | null>(null)
+
+// Top N most-recently-active projects for the Overview preview. The full
+// list lives at /sessions; here we just show enough to scan at a glance.
+const recentGroups = computed(() => sessionsStore.groups.slice(0, 8))
 const models = ref<ModelSummary[]>([])
 const heatmap = ref<HeatmapCell[]>([])
+const projectSpend = ref<ProjectMonthly[]>([])
+const costBreakdown = ref<CostBreakdown | null>(null)
+
+// Per-card time range — independent so the user can ask different
+// questions of each chart without one resetting the others.
+const modelsRange = ref<TimeRange>('30d')
+const costRange = ref<TimeRange>('30d')
+const projectsRange = ref<TimeRange>('30d')
 
 const currentDate = computed(() => {
   const d = new Date()
@@ -147,14 +214,21 @@ function trendPct(current: number, previous: number): number | null {
   return Math.round(((current - previous) / previous) * 100)
 }
 
+const window5hTrend = computed(() => {
+  const w = store.summary?.window_5h
+  if (!w) return null
+  return trendPct(w.cost, w.prev_cost)
+})
+
 const dayTrend = computed(() => {
   if (!store.summary?.trends) return null
   return trendPct(store.summary.today.cost, store.summary.trends.prev_day_cost)
 })
 
-const weekTrend = computed(() => {
-  if (!store.summary?.trends) return null
-  return trendPct(store.summary.week.cost, store.summary.trends.prev_week_cost)
+const window7dTrend = computed(() => {
+  const w = store.summary?.window_7d
+  if (!w) return null
+  return trendPct(w.cost, w.prev_cost)
 })
 
 const monthTrend = computed(() => {
@@ -162,15 +236,96 @@ const monthTrend = computed(() => {
   return trendPct(store.summary.month.cost, store.summary.trends.prev_month_cost)
 })
 
+// Previous calendar month's full name (e.g. "April"). Setting day=1 first
+// avoids the JavaScript month-arithmetic trap where Mar 31 - 1 month = Mar 3.
+const prevMonthName = computed(() => {
+  const d = new Date()
+  d.setDate(1)
+  d.setMonth(d.getMonth() - 1)
+  return d.toLocaleDateString('en-GB', { month: 'long' })
+})
+
+const prevMonthLabel = computed(() => {
+  const d = new Date()
+  d.setDate(1)
+  d.setMonth(d.getMonth() - 1)
+  return d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' })
+})
+
+const todayLabel = computed(() =>
+  new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }),
+)
+
+const monthLabel = computed(() =>
+  new Date().toLocaleDateString('en-GB', { month: 'long' }),
+)
+
+// Slices for the two Overview donuts.
+const costBreakdownSlices = computed(() => {
+  const cb = costBreakdown.value
+  if (!cb) return []
+  return [
+    { label: 'Input', value: cb.input_cost, color: '#f59e0b' },
+    { label: 'Output', value: cb.output_cost, color: '#fbbf24' },
+    { label: 'Cache Read', value: cb.cache_read_cost, color: '#78716c' },
+    { label: 'Cache Write', value: cb.cache_write_cost, color: '#44403c' },
+  ]
+})
+
+// Project palette for the second donut. Same set as ModelBreakdown so the
+// dashboard reads as one color story; cycles if there are more than 8 projects.
+const projectColors = ['#f59e0b', '#0ea5e9', '#10b981', '#a78bfa', '#fbbf24', '#ec4899', '#78716c', '#44403c']
+
+// Send the full project name through; the legend ellipsizes via CSS and
+// surfaces the full string in a native title-attribute tooltip, while
+// chart.js shows it in full when hovering a donut slice. Truncating at
+// the data layer would lose the hover affordance.
+const projectSpendSlices = computed(() =>
+  projectSpend.value.slice(0, 8).map((p, i) => ({
+    label: p.project || '(no project)',
+    value: p.cost,
+    color: projectColors[i % projectColors.length],
+  })),
+)
+
+const yesterdayLabel = computed(() => {
+  const d = new Date()
+  d.setDate(d.getDate() - 1)
+  return d.toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
+})
+
 async function openSession(id: string) {
   selectedSession.value = await fetchSession(id)
 }
 
-onMounted(async () => {
+async function loadModels() {
+  models.value = (await fetchModels(modelsRange.value)) || []
+}
+async function loadCostBreakdown() {
+  costBreakdown.value = await fetchCostBreakdown(costRange.value)
+}
+async function loadProjectSpend() {
+  projectSpend.value = (await fetchProjectsSpend(projectsRange.value)) || []
+}
+
+// Refetch each card independently when its own range changes — the others
+// don't need to re-render, so isolating the watchers avoids redundant
+// network requests.
+watch(modelsRange, loadModels)
+watch(costRange, loadCostBreakdown)
+watch(projectsRange, loadProjectSpend)
+
+async function loadHeatmap() {
+  heatmap.value = (await fetchHeatmap()) || []
+}
+
+onMounted(() => {
   if (!store.loaded) store.load()
-  const [m, h] = await Promise.all([fetchModels(), fetchHeatmap()])
-  models.value = m || []
-  heatmap.value = h || []
+  // Reset any date filter the user may have set on the Sessions tab — the
+  // Overview preview is a global "what have I been working on" view, not a
+  // filtered slice. setDateFilter triggers loadGroups internally.
+  sessionsStore.setDateFilter('')
+  Promise.all([loadModels(), loadCostBreakdown(), loadProjectSpend(), loadHeatmap()])
 })
 </script>
 
@@ -208,13 +363,34 @@ onMounted(async () => {
   grid-template-columns: 1fr 300px;
   gap: var(--space-5);
   margin-bottom: var(--space-8);
+  align-items: stretch;
+}
+/* The Projected card sits in the right slot of charts-row where the donut
+   used to live. Stretching its background to match DailySpendChart's height
+   keeps the visual rhythm of the row. */
+.charts-row .projected-slot {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
 }
 
 .insights-row {
   display: grid;
-  grid-template-columns: 340px 1fr;
+  /* minmax(0, 1fr) instead of 1fr: the default 1fr is minmax(auto, 1fr),
+     where 'auto' refuses to shrink below the content's min-content width.
+     Long project names in the legend would otherwise widen the third
+     track and push the card past the viewport. minmax(0,1fr) allows the
+     track to shrink so the inner text-overflow:ellipsis can kick in. */
+  grid-template-columns: 340px minmax(0, 1fr) minmax(0, 1fr);
   gap: var(--space-5);
   margin-bottom: var(--space-8);
+  align-items: stretch;
+}
+
+.heatmap-row {
+  margin-bottom: var(--space-8);
+  animation: fadeSlideUp 0.45s ease both;
+  animation-delay: 360ms;
 }
 
 .section-header {
@@ -267,5 +443,11 @@ thead th.right { text-align: right; }
 .top-section {
   margin-top: var(--space-8);
   animation-delay: 440ms;
+}
+
+tr.loading-row td {
+  padding: var(--space-4) var(--space-5);
+  color: var(--text-tertiary);
+  font-size: 12px;
 }
 </style>
