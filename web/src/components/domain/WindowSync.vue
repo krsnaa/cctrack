@@ -52,11 +52,14 @@
           </select>
           <span class="sep">@</span>
           <input
-            type="time"
-            v-model="resetTime"
-            class="ws-time"
-            aria-label="Reset time"
+            type="number"
+            v-model.number="resetHour"
+            min="0"
+            max="23"
+            placeholder="h"
+            aria-label="Reset hour"
           />
+          <span class="sep">h</span>
         </div>
       </div>
 
@@ -95,19 +98,14 @@ const props = defineProps<{ windowType: '5h' | '7d' }>()
 const hours = ref<number | null>(null)
 const minutes = ref<number | null>(null)
 
-// 7d fields — weekday (0=Sun..6=Sat) and clock time HH:MM, used to compute
-// the next future occurrence. Default to "now" so the user starts from a
-// sensible value and adjusts.
+// 7d fields — weekday (0=Sun..6=Sat) and a whole-hour clock value (0..23) used
+// to compute the next future occurrence. Whole-hour granularity matches
+// Anthropic's "Resets Tue 03:00" UI; minute precision was needless precision
+// the user never had to type.
 const weekday = ref<number>(new Date().getDay())
-const resetTime = ref<string>(formatHM(new Date()))
+const resetHour = ref<number>(new Date().getHours())
 
 const pct = ref<number | null>(null)
-
-function formatHM(d: Date): string {
-  const h = d.getHours().toString().padStart(2, '0')
-  const m = d.getMinutes().toString().padStart(2, '0')
-  return `${h}:${m}`
-}
 
 const latest = ref<WindowAnchor | null>(null)
 const submitting = ref(false)
@@ -122,17 +120,16 @@ const totalMinutes = computed(() => {
     const m = minutes.value ?? 0
     return h * 60 + m
   }
-  // 7d: derive minutes-until from chosen weekday + HH:MM, picking the next
-  // future occurrence. If the chosen moment is today but already past, roll
-  // forward 7 days.
-  if (!resetTime.value) return 0
-  const [hh, mm] = resetTime.value.split(':').map(Number)
-  if (Number.isNaN(hh) || Number.isNaN(mm)) return 0
+  // 7d: derive minutes-until from chosen weekday + whole hour, picking the
+  // next future occurrence. If the chosen moment is today but already past,
+  // roll forward 7 days.
+  const hh = resetHour.value
+  if (hh == null || Number.isNaN(hh) || hh < 0 || hh > 23) return 0
   const now = new Date()
   const target = new Date(now)
   const daysAhead = (weekday.value - now.getDay() + 7) % 7
   target.setDate(now.getDate() + daysAhead)
-  target.setHours(hh, mm, 0, 0)
+  target.setHours(hh, 0, 0, 0)
   if (target.getTime() <= now.getTime()) {
     target.setDate(target.getDate() + 7)
   }
@@ -166,9 +163,9 @@ async function submit() {
     hours.value = null
     minutes.value = null
     pct.value = null
-    // Re-default 7d weekday/time to "now" for the next sync cycle.
+    // Re-default 7d weekday/hour to "now" for the next sync cycle.
     weekday.value = new Date().getDay()
-    resetTime.value = formatHM(new Date())
+    resetHour.value = new Date().getHours()
   } catch (e: any) {
     status.value = `Sync failed: ${e?.message ?? 'unknown error'}`
     statusClass.value = 'err'
@@ -249,7 +246,7 @@ onMounted(loadLatest)
   gap: 4px;
 }
 .ws-duo input {
-  width: 56px;
+  width: 72px;
   background: var(--bg-base);
   border: 1px solid var(--border-default);
   color: var(--text-primary);
@@ -262,8 +259,7 @@ onMounted(loadLatest)
   font-size: 12px;
   color: var(--text-tertiary);
 }
-.ws-select,
-.ws-time {
+.ws-select {
   background: var(--bg-base);
   border: 1px solid var(--border-default);
   color: var(--text-primary);
@@ -271,10 +267,8 @@ onMounted(loadLatest)
   font-size: 13px;
   padding: 6px 8px;
 }
-.ws-select:hover,
-.ws-time:hover { border-color: var(--amber-500); }
-.ws-select:focus,
-.ws-time:focus { outline: none; border-color: var(--amber-500); }
+.ws-select:hover { border-color: var(--amber-500); }
+.ws-select:focus { outline: none; border-color: var(--amber-500); }
 .input-with-suffix {
   display: flex;
   align-items: center;
