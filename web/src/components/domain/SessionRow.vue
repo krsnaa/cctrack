@@ -8,6 +8,7 @@
       </div>
     </td>
     <td><Badge :label="formatModel(session.model)" /></td>
+    <td v-if="showStarted" class="time-cell">{{ formatDate(session.started_at) }}</td>
     <td class="time-cell">{{ formatDate(session.last_activity) }}</td>
     <td class="token-cell">{{ formatTokens(totalTokens) }}</td>
     <td class="cost-cell" :class="{ top: rank === 1 }">{{ formatCostDisplay(session.total_cost) }}</td>
@@ -24,6 +25,7 @@ const props = defineProps<{
   session: Session
   rank: number
   isActive?: boolean
+  showStarted?: boolean
 }>()
 
 defineEmits<{ select: [id: string] }>()
