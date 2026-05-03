@@ -63,21 +63,24 @@ func (s *Store) GetSummary() (*Summary, error) {
 	}
 	summary.Window7d = w7
 
-	// last_activity is stored as a UTC ISO timestamp from the JSONL log; the
-	// 'localtime' modifier converts to the host's local zone so "today" /
-	// "this month" buckets reflect the user's calendar, not UTC's.
+	// Aggregate from requests, not sessions: a session is a temporal *range*
+	// with a single last_activity point; bucketing total_cost by that point
+	// dumps the entire session's cost into one calendar day. Per-request
+	// timestamps attribute cost to the day it was actually incurred. The
+	// 'localtime' modifier converts UTC ISO timestamps to the host's local
+	// zone so "today" / "this month" buckets reflect the user's calendar.
 	err = s.db.QueryRow(`
-		SELECT COALESCE(SUM(total_cost), 0),
-		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h), 0)
-		FROM sessions WHERE DATE(last_activity, 'localtime') >= ?`, todayStr).Scan(&summary.Today.Cost, &summary.Today.Tokens)
+		SELECT COALESCE(SUM(cost), 0),
+		       COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_5m_tokens + cache_write_1h_tokens), 0)
+		FROM requests WHERE DATE(timestamp, 'localtime') >= ?`, todayStr).Scan(&summary.Today.Cost, &summary.Today.Tokens)
 	if err != nil {
 		return nil, err
 	}
 
 	err = s.db.QueryRow(`
-		SELECT COALESCE(SUM(total_cost), 0),
-		       COALESCE(SUM(total_input + total_output + total_cache_read + total_cache_write_5m + total_cache_write_1h), 0)
-		FROM sessions WHERE DATE(last_activity, 'localtime') >= ?`, monthStart).Scan(&summary.Month.Cost, &summary.Month.Tokens)
+		SELECT COALESCE(SUM(cost), 0),
+		       COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens + cache_write_5m_tokens + cache_write_1h_tokens), 0)
+		FROM requests WHERE DATE(timestamp, 'localtime') >= ?`, monthStart).Scan(&summary.Month.Cost, &summary.Month.Tokens)
 	if err != nil {
 		return nil, err
 	}
@@ -427,6 +430,10 @@ func (s *Store) GetProjects() ([]ProjectSummary, error) {
 // GetProjectsPrevMonth returns spend per project for the previous full local
 // calendar month, descending by cost. Drives the "Spend by Project · last
 // month" donut on the Overview.
+//
+// Joins requests → sessions so we attribute each request's cost to the day
+// it was actually incurred (per-request timestamp), while still grouping by
+// the project that owns the parent session.
 func (s *Store) GetProjectsPrevMonth() ([]ProjectMonthly, error) {
 	now := time.Now()
 	prevMonthStart := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, now.Location()).Format("2006-01-02")
@@ -434,11 +441,12 @@ func (s *Store) GetProjectsPrevMonth() ([]ProjectMonthly, error) {
 	monthLabel := time.Date(now.Year(), now.Month()-1, 1, 0, 0, 0, 0, now.Location()).Format("2006-01")
 
 	rows, err := s.db.Query(`
-		SELECT project, SUM(total_cost) as cost
-		FROM sessions
-		WHERE DATE(last_activity, 'localtime') >= ?
-		  AND DATE(last_activity, 'localtime') < ?
-		GROUP BY project
+		SELECT s.project, SUM(r.cost) as cost
+		FROM requests r
+		JOIN sessions s ON s.id = r.session_id
+		WHERE DATE(r.timestamp, 'localtime') >= ?
+		  AND DATE(r.timestamp, 'localtime') < ?
+		GROUP BY s.project
 		HAVING cost > 0
 		ORDER BY cost DESC`, prevMonthStart, thisMonthStart)
 	if err != nil {
@@ -459,13 +467,17 @@ func (s *Store) GetProjectsPrevMonth() ([]ProjectMonthly, error) {
 }
 
 func (s *Store) GetProjectMonthly() ([]ProjectMonthly, error) {
+	// Join requests → sessions so cross-month sessions are split by request
+	// timestamp into the months they actually spanned, not lumped into the
+	// month of last_activity.
 	rows, err := s.db.Query(`
-		SELECT project,
-			STRFTIME('%Y-%m', last_activity, 'localtime') as month,
-			SUM(total_cost) as cost
-		FROM sessions
-		WHERE DATE(last_activity, 'localtime') >= DATE('now', '-6 months', 'localtime')
-		GROUP BY project, month
+		SELECT s.project,
+			STRFTIME('%Y-%m', r.timestamp, 'localtime') as month,
+			SUM(r.cost) as cost
+		FROM requests r
+		JOIN sessions s ON s.id = r.session_id
+		WHERE DATE(r.timestamp, 'localtime') >= DATE('now', '-6 months', 'localtime')
+		GROUP BY s.project, month
 		ORDER BY month ASC, cost DESC`)
 	if err != nil {
 		return nil, err
@@ -579,12 +591,17 @@ type HeatmapCell struct {
 }
 
 func (s *Store) GetActivityHeatmap() ([]HeatmapCell, error) {
+	// Bucket per request, not per session: the prior session-based query put
+	// every request of a multi-hour session into a single (dow, hour) cell —
+	// the hour of last_activity — making long sessions look like single-hour
+	// spikes. Per-request timestamps spread cost across the cells where the
+	// work actually happened.
 	rows, err := s.db.Query(`
-		SELECT CAST(STRFTIME('%w', last_activity, 'localtime') AS INTEGER) as dow,
-			CAST(STRFTIME('%H', last_activity, 'localtime') AS INTEGER) as hour,
-			SUM(total_cost) as cost
-		FROM sessions
-		WHERE last_activity != ''
+		SELECT CAST(STRFTIME('%w', timestamp, 'localtime') AS INTEGER) as dow,
+			CAST(STRFTIME('%H', timestamp, 'localtime') AS INTEGER) as hour,
+			SUM(cost) as cost
+		FROM requests
+		WHERE timestamp != ''
 		GROUP BY dow, hour
 		ORDER BY dow, hour`)
 	if err != nil {
@@ -620,19 +637,21 @@ func (s *Store) GetTrends() (*Trends, error) {
 
 	t := &Trends{}
 
-	// Previous day cost (yesterday) — local-day buckets so "yesterday" matches
-	// the user's calendar regardless of where UTC midnight falls.
+	// Previous day cost (yesterday) — sums per-request cost so multi-day
+	// sessions don't spill across day boundaries. Local-day buckets so
+	// "yesterday" matches the user's calendar regardless of where UTC
+	// midnight falls.
 	s.db.QueryRow(`
-		SELECT COALESCE(SUM(total_cost), 0)
-		FROM sessions WHERE DATE(last_activity, 'localtime') >= ?
-			AND DATE(last_activity, 'localtime') < ?`,
+		SELECT COALESCE(SUM(cost), 0)
+		FROM requests WHERE DATE(timestamp, 'localtime') >= ?
+			AND DATE(timestamp, 'localtime') < ?`,
 		yesterday, todayStr).Scan(&t.PrevDayCost)
 
-	// Previous month cost
+	// Previous month cost — same per-request aggregation.
 	s.db.QueryRow(`
-		SELECT COALESCE(SUM(total_cost), 0)
-		FROM sessions WHERE DATE(last_activity, 'localtime') >= ?
-			AND DATE(last_activity, 'localtime') < ?`,
+		SELECT COALESCE(SUM(cost), 0)
+		FROM requests WHERE DATE(timestamp, 'localtime') >= ?
+			AND DATE(timestamp, 'localtime') < ?`,
 		prevMonthStart, prevMonthEnd).Scan(&t.PrevMonthCost)
 
 	return t, nil
