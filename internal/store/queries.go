@@ -152,6 +152,20 @@ func (s *Store) windowFromAnchorOrCascade(windowType string, duration time.Durat
 	return bucket, nil
 }
 
+// CostInRange sums request cost in [start, end). Half-open interval so
+// adjacent windows don't double-count the boundary timestamp.
+func (s *Store) CostInRange(start, end time.Time) (float64, error) {
+	var cost float64
+	err := s.db.QueryRow(`
+		SELECT COALESCE(SUM(cost), 0)
+		FROM requests
+		WHERE timestamp >= ? AND timestamp < ?`,
+		start.UTC().Format(time.RFC3339Nano),
+		end.UTC().Format(time.RFC3339Nano),
+	).Scan(&cost)
+	return cost, err
+}
+
 func (s *Store) computeAnchoredBucket(start, end time.Time, duration time.Duration) (WindowBucket, error) {
 	startStr := start.UTC().Format(time.RFC3339Nano)
 	endStr := end.UTC().Format(time.RFC3339Nano)

@@ -138,13 +138,20 @@ func (a *API) handlePostWindowAnchor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Snapshot current observed cost from cctrack's view of the window so the
-	// inferred cap is computed against the right denominator.
+	// Compute observed_cost over the window the *user is describing*, not
+	// cctrack's cascading detection. The cascading detector picks its own
+	// window boundaries from the request stream, which can diverge from
+	// Anthropic's actual window — so dividing the wrong cost by the user's
+	// pct yields a wildly wrong cap (off by a factor of 5–50× in practice).
+	// Anchored bounds: [now-(duration-time_left), now].
 	duration := 5 * time.Hour
 	if body.WindowType == "7d" {
 		duration = 7 * 24 * time.Hour
 	}
-	current, err := a.store.GetWindowBucket(duration)
+	now := time.Now()
+	anchoredEnd := now.Add(time.Duration(body.TimeLeftMinutes) * time.Minute)
+	windowStart := anchoredEnd.Add(-duration)
+	observed, err := a.store.CostInRange(windowStart, now)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -154,7 +161,7 @@ func (a *API) handlePostWindowAnchor(w http.ResponseWriter, r *http.Request) {
 		WindowType:      body.WindowType,
 		TimeLeftMinutes: body.TimeLeftMinutes,
 		AnthropicPct:    body.AnthropicPct,
-		ObservedCost:    current.Cost,
+		ObservedCost:    observed,
 	}
 	id, err := a.store.SaveWindowAnchor(anchor)
 	if err != nil {
