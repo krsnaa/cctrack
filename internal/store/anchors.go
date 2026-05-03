@@ -80,6 +80,32 @@ func (s *Store) GetLatestAnchor(windowType string) (*WindowAnchor, error) {
 	return a, nil
 }
 
+// GetLatestCap returns the most recent non-null inferred cap for a
+// window_type, regardless of whether that anchor's window is still active.
+// Caps are properties of the user's *plan* (and surface mix), not of any
+// single window — so even after an anchor's timing has elapsed, its cap
+// estimate remains the best guess until the user syncs again with a fresh
+// percentage. Returns nil if no anchor with a cap exists yet.
+func (s *Store) GetLatestCap(windowType string) (*float64, error) {
+	row := s.db.QueryRow(`
+		SELECT inferred_cap
+		FROM window_anchors
+		WHERE window_type = ? AND inferred_cap IS NOT NULL
+		ORDER BY synced_at DESC LIMIT 1`, windowType)
+	var cap sql.NullFloat64
+	if err := row.Scan(&cap); err != nil {
+		if err == sql.ErrNoRows {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if !cap.Valid {
+		return nil, nil
+	}
+	v := cap.Float64
+	return &v, nil
+}
+
 // ListAnchors returns the N most recent anchors for a window_type, newest
 // first. Drives any future "cap-over-time" history view.
 func (s *Store) ListAnchors(windowType string, limit int) ([]WindowAnchor, error) {

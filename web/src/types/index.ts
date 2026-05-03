@@ -23,6 +23,7 @@ export interface WindowBucket {
   request_count: number
   prev_cost: number
   prev_start: string
+  cap?: number | null
 }
 
 export interface WindowAnchor {

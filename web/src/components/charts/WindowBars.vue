@@ -99,20 +99,28 @@ function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): 
   if (!w?.start) return null
   const timePct = Math.round(pctElapsed(w.start, w.end) * 10) / 10
   const remaining = remainingLabel(w.end)
-  const tooltip = fmtRange(w.start, w.end)
   const resetsAt = fmtResetMoment(w.end, longHorizon)
 
-  // Usage fill is normalized against the previous window's total cost. Without
-  // a previous window we can't compute pace meaningfully — show time marker
-  // only, no fill.
-  if (!w.prev_cost || w.prev_cost <= 0) {
+  // Denominator preference: cap (synced from claude.ai) > prev_cost (cascade
+  // fallback). The cap is plan-level, so it survives anchor expiry and gives
+  // a stable cap-relative fill that mirrors what claude.ai shows.
+  const denom = w.cap && w.cap > 0 ? w.cap : (w.prev_cost > 0 ? w.prev_cost : 0)
+  const mode = w.cap && w.cap > 0 ? 'cap' : (w.prev_cost > 0 ? 'prev' : 'none')
+  const baseTooltip = fmtRange(w.start, w.end)
+  const tooltip = mode === 'cap'
+    ? `${baseTooltip}\n$${w.cost.toFixed(2)} of $${(w.cap as number).toFixed(2)} cap`
+    : mode === 'prev'
+      ? `${baseTooltip}\n$${w.cost.toFixed(2)} this window · $${w.prev_cost.toFixed(2)} previous`
+      : baseTooltip
+
+  if (denom <= 0) {
     return {
       title, timePct, usagePct: 0, usageWidth: 0,
-      paceText: 'no prev window', paceClass: '',
+      paceText: 'sync to enable', paceClass: '',
       remaining, resetsAt, tooltip,
     }
   }
-  const usagePct = (w.cost / w.prev_cost) * 100
+  const usagePct = (w.cost / denom) * 100
   const usageWidth = Math.max(0, Math.min(100, usagePct))
   // Pace = how far ahead/behind the time marker the usage fill is. Same metric
   // for both directions; sign tells us which.

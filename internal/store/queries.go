@@ -20,13 +20,17 @@ type Summary struct {
 // request lands at-or-after the previous window's end. Cascading windows
 // (each closes on its own clock, not on inactivity) — see GetWindowBucket.
 type WindowBucket struct {
-	Start        string  `json:"start"`         // ISO 8601 UTC
-	End          string  `json:"end"`           // ISO 8601 UTC
-	Cost         float64 `json:"cost"`          // total cost of requests in this window
-	Tokens       int64   `json:"tokens"`        // total tokens
-	RequestCount int     `json:"request_count"` // number of requests
-	PrevCost     float64 `json:"prev_cost"`     // cost of the previous window
-	PrevStart    string  `json:"prev_start"`    // ISO 8601 UTC; "" if no prev window
+	Start        string   `json:"start"`         // ISO 8601 UTC
+	End          string   `json:"end"`           // ISO 8601 UTC
+	Cost         float64  `json:"cost"`          // total cost of requests in this window
+	Tokens       int64    `json:"tokens"`        // total tokens
+	RequestCount int      `json:"request_count"` // number of requests
+	PrevCost     float64  `json:"prev_cost"`     // cost of the previous window
+	PrevStart    string   `json:"prev_start"`    // ISO 8601 UTC; "" if no prev window
+	// Cap is the user's effective spend cap for this window in USD, inferred
+	// from the most recent sync against claude.ai (cost / pct). Nil when no
+	// sync with a percentage exists yet — clients fall back to prev_cost.
+	Cap *float64 `json:"cap,omitempty"`
 }
 
 type SpendBucket struct {
@@ -98,11 +102,17 @@ func (s *Store) GetSummary() (*Summary, error) {
 // windowFromAnchorOrCascade prefers a fresh user-synced anchor for the given
 // window type; falls back to cascading inference when no anchor exists or the
 // anchored window has fully elapsed (in which case the user needs to re-sync).
+//
+// Either way, attaches the latest known cap (from the most recent anchor with
+// a percentage, regardless of staleness) so the dashboard can show a
+// cap-relative fill instead of the prev-window comparison.
 func (s *Store) windowFromAnchorOrCascade(windowType string, duration time.Duration) (WindowBucket, error) {
+	var bucket WindowBucket
 	a, err := s.GetLatestAnchor(windowType)
 	if err != nil {
 		return WindowBucket{}, err
 	}
+	used := false
 	if a != nil {
 		syncedAt, perr := time.Parse(time.RFC3339Nano, a.SyncedAt)
 		if perr == nil {
@@ -110,11 +120,28 @@ func (s *Store) windowFromAnchorOrCascade(windowType string, duration time.Durat
 			if time.Now().Before(anchoredEnd) {
 				// Anchor still valid — use it.
 				start := anchoredEnd.Add(-duration)
-				return s.computeAnchoredBucket(start, anchoredEnd, duration)
+				b, e := s.computeAnchoredBucket(start, anchoredEnd, duration)
+				if e != nil {
+					return WindowBucket{}, e
+				}
+				bucket = b
+				used = true
 			}
 		}
 	}
-	return s.GetWindowBucket(duration)
+	if !used {
+		b, e := s.GetWindowBucket(duration)
+		if e != nil {
+			return WindowBucket{}, e
+		}
+		bucket = b
+	}
+
+	cap, err := s.GetLatestCap(windowType)
+	if err == nil && cap != nil {
+		bucket.Cap = cap
+	}
+	return bucket, nil
 }
 
 func (s *Store) computeAnchoredBucket(start, end time.Time, duration time.Duration) (WindowBucket, error) {
