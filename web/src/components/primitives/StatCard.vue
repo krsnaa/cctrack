@@ -9,6 +9,9 @@
     <div v-if="trendPct !== undefined && trendPct !== null" class="stat-trend" :class="trendClass">
       <span class="trend-arrow">{{ trendPct > 0 ? '↑' : trendPct < 0 ? '↓' : '→' }}</span>
       <span>{{ Math.abs(trendPct) }}% vs {{ trendLabel }}</span>
+      <span v-if="prevName || prevAmount !== undefined" class="trend-prev">
+        ({{ prevName }}<template v-if="prevName && prevAmount !== undefined"> · </template><template v-if="prevAmount !== undefined">{{ formatCostDisplay(prevAmount) }}</template>)
+      </span>
     </div>
     <div v-if="highlight && budget > 0" class="budget-bar-wrap">
       <div class="budget-bar-fill" :style="{ width: budgetPct + '%', background: budgetColor }"></div>
@@ -19,7 +22,7 @@
 <script setup lang="ts">
 import { computed, toRef } from 'vue'
 import { useCountUp } from '../../composables/useCountUp'
-import { formatTokens } from '../../composables/useFormatCost'
+import { formatTokens, formatCostDisplay } from '../../composables/useFormatCost'
 
 const props = defineProps<{
   label: string
@@ -30,6 +33,10 @@ const props = defineProps<{
   subtext?: string
   trendPct?: number | null
   trendLabel?: string
+  // Optional: when present, render `(prevName · prevAmount)` after the trend
+  // percentage so the user sees what they're being compared against.
+  prevName?: string
+  prevAmount?: number
 }>()
 
 const targetValue = toRef(props, 'value')
@@ -125,6 +132,10 @@ const budgetColor = computed(() => {
 .stat-trend.trend-flat { color: var(--text-tertiary); }
 .trend-arrow {
   margin-right: 3px;
+}
+.trend-prev {
+  color: var(--text-tertiary);
+  margin-left: 6px;
 }
 .budget-bar-wrap {
   margin-top: var(--space-4);

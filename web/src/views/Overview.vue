@@ -28,6 +28,8 @@
         :tokens="store.summary.month.tokens"
         :trendPct="monthTrend"
         trendLabel="prev month"
+        :prevName="prevMonthName"
+        :prevAmount="store.summary.trends?.prev_month_cost"
       />
       <StatCard
         label="Projected"
@@ -160,6 +162,15 @@ const weekTrend = computed(() => {
 const monthTrend = computed(() => {
   if (!store.summary?.trends) return null
   return trendPct(store.summary.month.cost, store.summary.trends.prev_month_cost)
+})
+
+// Previous calendar month's full name (e.g. "April"). Setting day=1 first
+// avoids the JavaScript month-arithmetic trap where Mar 31 - 1 month = Mar 3.
+const prevMonthName = computed(() => {
+  const d = new Date()
+  d.setDate(1)
+  d.setMonth(d.getMonth() - 1)
+  return d.toLocaleDateString('en-GB', { month: 'long' })
 })
 
 async function openSession(id: string) {
