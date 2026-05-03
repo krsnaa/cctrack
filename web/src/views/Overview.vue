@@ -10,14 +10,12 @@
         :label="hourLabel"
         :value="store.summary.hour?.cost ?? 0"
         :tokens="store.summary.hour?.tokens ?? 0"
-        subtext="current hour"
+        :highlight="true"
       />
       <StatCard
         :label="todayLabel"
         :value="store.summary.today.cost"
         :tokens="store.summary.today.tokens"
-        :highlight="true"
-        :budget="store.summary.budget"
         :trendPct="dayTrend"
         :prevName="yesterdayLabel"
         :prevAmount="store.summary.trends?.prev_day_cost"
@@ -34,6 +32,7 @@
         :label="monthLabel"
         :value="store.summary.month.cost"
         :tokens="store.summary.month.tokens"
+        :budget="store.summary.budget"
         :trendPct="monthTrend"
         :prevName="prevMonthName"
         :prevAmount="store.summary.trends?.prev_month_cost"

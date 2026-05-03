@@ -12,7 +12,7 @@
         {{ Math.abs(trendPct) }}% vs {{ prevName || trendLabel }}<template v-if="prevAmount !== undefined"> · {{ formatCostDisplay(prevAmount) }}</template>
       </span>
     </div>
-    <div v-if="highlight && budget > 0" class="budget-bar-wrap">
+    <div v-if="budget && budget > 0" class="budget-bar-wrap">
       <div class="budget-bar-fill" :style="{ width: budgetPct + '%', background: budgetColor }"></div>
     </div>
   </div>
@@ -42,6 +42,10 @@ const targetValue = toRef(props, 'value')
 const animated = useCountUp(targetValue)
 
 const formattedValue = computed(() => {
+  // Target value drives the format; useCountUp animates `animated.value`
+  // through small intermediate numbers that we don't want to render as
+  // $0.0000 for the entire animation when the target is 0.
+  if (props.value === 0) return '$0.00'
   const v = animated.value
   if (v < 0.01) return '$' + v.toFixed(4)
   return '$' + v.toFixed(2)

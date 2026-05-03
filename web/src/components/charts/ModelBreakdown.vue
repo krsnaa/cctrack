@@ -22,20 +22,13 @@
         </div>
       </div>
     </div>
-    <div class="savings-hint" v-if="savingsEstimate > 0">
-      <div class="savings-icon">$</div>
-      <div class="savings-text">
-        Switching Opus sessions to Sonnet could save ~<strong>{{ formatCostDisplay(savingsEstimate) }}</strong>/mo
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted } from 'vue'
+import { computed } from 'vue'
 import type { ModelSummary } from '../../types'
 import { formatCostDisplay, formatFamily } from '../../composables/useFormatCost'
-import { useRates } from '../../composables/useRates'
 
 const props = defineProps<{ models: ModelSummary[] }>()
 
@@ -52,9 +45,6 @@ const familyColors = [
   '#78716c', // stone
   '#44403c', // stone dark
 ]
-
-const { rates, load: loadRates } = useRates()
-onMounted(loadRates)
 
 const totalCost = computed(() => props.models.reduce((s, m) => s + m.total_cost, 0))
 
@@ -81,25 +71,6 @@ function barWidth(cost: number) {
   return Math.max((cost / max) * 100, 2)
 }
 
-// Estimate savings if Opus spend were redirected to Sonnet. Computed from the
-// live rate card: for each Opus group, scale its actual cost by Sonnet's output
-// rate / that Opus version's output rate. Output dominates LLM costs and
-// scaling input identically would over-state cache-heavy workloads.
-const savingsEstimate = computed(() => {
-  if (!rates.value.length) return 0
-  const sonnetRate = rates.value
-    .filter(r => r.Family.startsWith('claude-sonnet-4'))
-    .reduce((min, r) => Math.min(min, r.OutputPerMToken), Infinity)
-  if (!isFinite(sonnetRate)) return 0
-  let saved = 0
-  for (const group of familyGroups.value) {
-    if (!group.family.includes('opus')) continue
-    const opus = rates.value.find(r => r.Family === group.family)
-    if (!opus || opus.OutputPerMToken <= sonnetRate) continue
-    saved += group.cost * (1 - sonnetRate / opus.OutputPerMToken)
-  }
-  return saved
-})
 </script>
 
 <style scoped>
@@ -171,36 +142,5 @@ const savingsEstimate = computed(() => {
 }
 .bar-sessions {
   color: var(--text-disabled);
-}
-.savings-hint {
-  margin-top: var(--space-5);
-  padding: var(--space-3) var(--space-4);
-  background: rgba(245, 158, 11, 0.06);
-  border: 1px solid rgba(245, 158, 11, 0.12);
-  display: flex;
-  align-items: flex-start;
-  gap: var(--space-3);
-}
-.savings-icon {
-  font-family: 'JetBrains Mono', monospace;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--amber-500);
-  width: 20px;
-  height: 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgba(245, 158, 11, 0.12);
-  flex-shrink: 0;
-}
-.savings-text {
-  font-size: 11.5px;
-  color: var(--text-secondary);
-  line-height: 1.45;
-}
-.savings-text strong {
-  color: var(--amber-400);
-  font-weight: 500;
 }
 </style>
