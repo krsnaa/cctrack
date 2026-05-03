@@ -13,7 +13,8 @@
             <th class="right">Input</th>
             <th class="right">Output</th>
             <th class="right">Cache Read</th>
-            <th class="right">Cache Write</th>
+            <th class="right">Cache Write 5m</th>
+            <th class="right">Cache Write 1h</th>
           </tr>
         </thead>
         <tbody>
@@ -22,7 +23,8 @@
             <td class="price right">${{ rate.InputPerMToken.toFixed(2) }}</td>
             <td class="price right">${{ rate.OutputPerMToken.toFixed(2) }}</td>
             <td class="price right">${{ rate.CacheReadPerMToken.toFixed(2) }}</td>
-            <td class="price right">${{ rate.CacheWritePerMToken.toFixed(2) }}</td>
+            <td class="price right">${{ rate.CacheWrite5mPerMToken.toFixed(2) }}</td>
+            <td class="price right">${{ rate.CacheWrite1hPerMToken.toFixed(2) }}</td>
           </tr>
         </tbody>
       </table>
