@@ -45,6 +45,20 @@
       </section>
 
       <section class="settings-section">
+        <div class="section-label">Window Sync</div>
+        <p class="section-help">
+          cctrack only sees claude-code activity on this machine, so its
+          rolling window estimates can drift from what claude.ai shows. Paste
+          the time-left value (and optionally % used) from claude.ai → Settings
+          → Plan usage limits to anchor cctrack's windows to Anthropic's
+          authoritative state.
+        </p>
+
+        <WindowSync window-type="5h" />
+        <WindowSync window-type="7d" />
+      </section>
+
+      <section class="settings-section">
         <div class="section-label">About</div>
         <div class="about-grid">
           <span>Version</span><span class="mono">v0.1.0</span>
@@ -69,6 +83,7 @@ import { onMounted } from 'vue'
 import { useSettingsStore } from '../stores/settings'
 import { useRates } from '../composables/useRates'
 import Toggle from '../components/primitives/Toggle.vue'
+import WindowSync from '../components/domain/WindowSync.vue'
 
 const store = useSettingsStore()
 const { version: ratesVersion, updated: ratesUpdated, load: loadRates } = useRates()
@@ -111,6 +126,13 @@ onMounted(() => {
   color: var(--text-tertiary);
   padding-bottom: var(--space-2);
   border-bottom: 1px solid var(--border-subtle);
+}
+.section-help {
+  font-size: 12px;
+  color: var(--text-tertiary);
+  line-height: 1.5;
+  margin: 0;
+  max-width: 60ch;
 }
 .field {
   display: flex;

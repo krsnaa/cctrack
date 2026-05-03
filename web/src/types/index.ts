@@ -25,6 +25,16 @@ export interface WindowBucket {
   prev_start: string
 }
 
+export interface WindowAnchor {
+  id: number
+  synced_at: string
+  window_type: '5h' | '7d'
+  time_left_minutes: number
+  anthropic_pct?: number | null
+  observed_cost: number
+  inferred_cap?: number | null
+}
+
 export interface Summary {
   window_5h: WindowBucket
   today: SpendBucket

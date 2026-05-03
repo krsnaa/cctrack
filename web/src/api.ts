@@ -1,4 +1,4 @@
-import type { Summary, SessionsResponse, Session, DailySpend, Settings, RatesResponse, ProjectSummary, ProjectMonthly, ProjectGroupsResponse, ModelSummary, HeatmapCell, RequestRecord } from './types'
+import type { Summary, SessionsResponse, Session, DailySpend, Settings, RatesResponse, ProjectSummary, ProjectMonthly, ProjectGroupsResponse, ModelSummary, HeatmapCell, RequestRecord, WindowAnchor } from './types'
 
 const BASE = '/api/v1'
 
@@ -88,4 +88,29 @@ export async function fetchHeatmap(): Promise<HeatmapCell[]> {
 
 export async function fetchSessionRequests(sessionId: string): Promise<RequestRecord[]> {
   return get<RequestRecord[]>(`/sessions/${sessionId}/requests`)
+}
+
+export async function fetchWindowAnchors(type: '5h' | '7d', limit = 50): Promise<{ anchors: WindowAnchor[] }> {
+  return get<{ anchors: WindowAnchor[] }>(`/window-anchors?type=${type}&limit=${limit}`)
+}
+
+export async function postWindowAnchor(
+  windowType: '5h' | '7d',
+  timeLeftMinutes: number,
+  anthropicPct?: number,
+): Promise<{ id: number; anchor: WindowAnchor }> {
+  const body: Record<string, unknown> = {
+    window_type: windowType,
+    time_left_minutes: timeLeftMinutes,
+  }
+  if (anthropicPct !== undefined && anthropicPct !== null) {
+    body.anthropic_pct = anthropicPct
+  }
+  const res = await fetch(`${BASE}/window-anchors`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`API error: ${res.status}`)
+  return res.json()
 }

@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/ksred/cctrack/internal/calculator"
@@ -27,6 +28,8 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/summary", a.handleSummary)
 	mux.HandleFunc("GET /api/v1/sessions", a.handleSessions)
 	mux.HandleFunc("GET /api/v1/sessions/grouped", a.handleSessionsGrouped)
+	mux.HandleFunc("POST /api/v1/window-anchors", a.handlePostWindowAnchor)
+	mux.HandleFunc("GET /api/v1/window-anchors", a.handleListWindowAnchors)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", a.handleSession)
 	mux.HandleFunc("GET /api/v1/recent", a.handleRecent)
 	mux.HandleFunc("GET /api/v1/daily", a.handleDaily)
@@ -114,6 +117,70 @@ func (a *API) handleSessions(w http.ResponseWriter, r *http.Request) {
 		"date":     date,
 		"project":  project,
 	})
+}
+
+func (a *API) handlePostWindowAnchor(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		WindowType      string   `json:"window_type"`
+		TimeLeftMinutes int      `json:"time_left_minutes"`
+		AnthropicPct    *float64 `json:"anthropic_pct,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid JSON", 400)
+		return
+	}
+	if body.WindowType != "5h" && body.WindowType != "7d" {
+		http.Error(w, "window_type must be '5h' or '7d'", 400)
+		return
+	}
+	if body.TimeLeftMinutes < 0 {
+		http.Error(w, "time_left_minutes must be >= 0", 400)
+		return
+	}
+
+	// Snapshot current observed cost from cctrack's view of the window so the
+	// inferred cap is computed against the right denominator.
+	duration := 5 * time.Hour
+	if body.WindowType == "7d" {
+		duration = 7 * 24 * time.Hour
+	}
+	current, err := a.store.GetWindowBucket(duration)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	anchor := store.WindowAnchor{
+		WindowType:      body.WindowType,
+		TimeLeftMinutes: body.TimeLeftMinutes,
+		AnthropicPct:    body.AnthropicPct,
+		ObservedCost:    current.Cost,
+	}
+	id, err := a.store.SaveWindowAnchor(anchor)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	saved, _ := a.store.GetLatestAnchor(body.WindowType)
+	writeJSON(w, map[string]any{
+		"id":     id,
+		"anchor": saved,
+	})
+}
+
+func (a *API) handleListWindowAnchors(w http.ResponseWriter, r *http.Request) {
+	wt := r.URL.Query().Get("type")
+	limit := queryInt(r, "limit", 50)
+	if wt != "5h" && wt != "7d" {
+		http.Error(w, "type must be '5h' or '7d'", 400)
+		return
+	}
+	rows, err := a.store.ListAnchors(wt, limit)
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	writeJSON(w, map[string]any{"anchors": rows})
 }
 
 func (a *API) handleSessionsGrouped(w http.ResponseWriter, r *http.Request) {

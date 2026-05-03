@@ -39,12 +39,11 @@ type DailySpend struct {
 	Cost float64 `json:"cost"`
 }
 
-// GetSummary builds the dashboard summary. Both 5h and 7d windows use the
-// rolling/cascading algorithm (each window opens at the first event after the
-// previous one expired and lasts the fixed duration). Anthropic's weekly limit
-// is *not* calendar-anchored — its reset weekday changes every week based on
-// when the user first hits any surface after the previous weekly window
-// expired.
+// GetSummary builds the dashboard summary. Both 5h and 7d windows are rolling
+// (each window opens at the first event after the previous one expired). When
+// the user has synced an anchor from claude.ai (a "I see N min left right
+// now" entry), we use that to override the cascading detection — it closes
+// the data-source-scope gap that the cascading inference can't bridge.
 func (s *Store) GetSummary() (*Summary, error) {
 	now := time.Now()
 	todayStr := now.Format("2006-01-02")
@@ -52,13 +51,13 @@ func (s *Store) GetSummary() (*Summary, error) {
 
 	summary := &Summary{}
 
-	w5, err := s.GetWindowBucket(5 * time.Hour)
+	w5, err := s.windowFromAnchorOrCascade("5h", 5*time.Hour)
 	if err != nil {
 		return nil, err
 	}
 	summary.Window5h = w5
 
-	w7, err := s.GetWindowBucket(7 * 24 * time.Hour)
+	w7, err := s.windowFromAnchorOrCascade("7d", 7*24*time.Hour)
 	if err != nil {
 		return nil, err
 	}
@@ -91,6 +90,59 @@ func (s *Store) GetSummary() (*Summary, error) {
 	}
 
 	return summary, nil
+}
+
+// windowFromAnchorOrCascade prefers a fresh user-synced anchor for the given
+// window type; falls back to cascading inference when no anchor exists or the
+// anchored window has fully elapsed (in which case the user needs to re-sync).
+func (s *Store) windowFromAnchorOrCascade(windowType string, duration time.Duration) (WindowBucket, error) {
+	a, err := s.GetLatestAnchor(windowType)
+	if err != nil {
+		return WindowBucket{}, err
+	}
+	if a != nil {
+		syncedAt, perr := time.Parse(time.RFC3339Nano, a.SyncedAt)
+		if perr == nil {
+			anchoredEnd := syncedAt.Add(time.Duration(a.TimeLeftMinutes) * time.Minute)
+			if time.Now().Before(anchoredEnd) {
+				// Anchor still valid — use it.
+				start := anchoredEnd.Add(-duration)
+				return s.computeAnchoredBucket(start, anchoredEnd, duration)
+			}
+		}
+	}
+	return s.GetWindowBucket(duration)
+}
+
+func (s *Store) computeAnchoredBucket(start, end time.Time, duration time.Duration) (WindowBucket, error) {
+	startStr := start.UTC().Format(time.RFC3339Nano)
+	endStr := end.UTC().Format(time.RFC3339Nano)
+	prevStart := start.Add(-duration)
+	prevStartStr := prevStart.UTC().Format(time.RFC3339Nano)
+
+	bucket := WindowBucket{
+		Start:     startStr,
+		End:       endStr,
+		PrevStart: prevStartStr,
+	}
+	if err := s.db.QueryRow(`
+		SELECT COALESCE(SUM(cost), 0),
+		       COALESCE(SUM(input_tokens + output_tokens + cache_read_tokens
+		                  + cache_write_5m_tokens + cache_write_1h_tokens), 0),
+		       COUNT(*)
+		FROM requests WHERE timestamp >= ? AND timestamp < ?`,
+		startStr, endStr,
+	).Scan(&bucket.Cost, &bucket.Tokens, &bucket.RequestCount); err != nil {
+		return WindowBucket{}, err
+	}
+	if err := s.db.QueryRow(`
+		SELECT COALESCE(SUM(cost), 0)
+		FROM requests WHERE timestamp >= ? AND timestamp < ?`,
+		prevStartStr, startStr,
+	).Scan(&bucket.PrevCost); err != nil {
+		return WindowBucket{}, err
+	}
+	return bucket, nil
 }
 
 // GetWindowBucket walks the request timestamps in order, opens a new rolling

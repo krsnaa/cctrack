@@ -95,6 +95,18 @@ func (s *Store) migrate() error {
 			FOREIGN KEY (session_id) REFERENCES sessions(id)
 		);
 
+		CREATE TABLE IF NOT EXISTS window_anchors (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			synced_at  TEXT NOT NULL,
+			window_type TEXT NOT NULL,
+			time_left_minutes INTEGER NOT NULL,
+			anthropic_pct REAL,
+			observed_cost REAL NOT NULL DEFAULT 0,
+			inferred_cap REAL
+		);
+		CREATE INDEX IF NOT EXISTS idx_window_anchors_type_synced
+			ON window_anchors(window_type, synced_at DESC);
+
 		CREATE INDEX IF NOT EXISTS idx_sessions_last_activity ON sessions(last_activity);
 		CREATE INDEX IF NOT EXISTS idx_sessions_total_cost ON sessions(total_cost);
 		CREATE INDEX IF NOT EXISTS idx_sessions_started_at ON sessions(started_at);
