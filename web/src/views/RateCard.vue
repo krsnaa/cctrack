@@ -7,7 +7,7 @@
       </div>
     </div>
 
-    <div class="rate-table-wrap" v-if="rates.length">
+    <div class="rate-table-wrap" v-if="ratesSorted.length">
       <table>
         <thead>
           <tr>
@@ -21,7 +21,7 @@
           </tr>
         </thead>
         <tbody>
-          <tr v-for="rate in rates" :key="rate.Family">
+          <tr v-for="rate in ratesSorted" :key="rate.Family">
             <td class="model-name">{{ rate.Family }}</td>
             <td class="released">{{ rate.Released || '—' }}</td>
             <td class="price right">${{ rate.InputPerMToken.toFixed(2) }}</td>
@@ -41,11 +41,25 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted } from 'vue'
+import { computed, onMounted } from 'vue'
 import { useRates } from '../composables/useRates'
 
 const { rates, version, updated, load } = useRates()
 onMounted(load)
+
+// Display newest first. Entries without a Released date sink to the bottom
+// (alphabetical by Family within that bucket) so the empty rows don't muddle
+// the chronological view above them.
+const ratesSorted = computed(() => {
+  return [...rates.value].sort((a, b) => {
+    const ar = a.Released || ''
+    const br = b.Released || ''
+    if (ar && br) return br.localeCompare(ar)
+    if (ar) return -1
+    if (br) return 1
+    return a.Family.localeCompare(b.Family)
+  })
+})
 </script>
 
 <style scoped>
