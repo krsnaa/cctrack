@@ -67,7 +67,6 @@
       </ModelBreakdown>
       <Donut
         title="Cost Breakdown"
-        :subtitle="rangeLabel(costRange) + ' · by token type'"
         :slices="costBreakdownSlices"
       >
         <template #header-action>
@@ -76,7 +75,6 @@
       </Donut>
       <Donut
         title="Spend by Project"
-        :subtitle="rangeLabel(projectsRange) + ' · top projects'"
         :slices="projectSpendSlices"
         emptyText="No spend in this range"
       >
@@ -180,17 +178,6 @@ const costBreakdown = ref<CostBreakdown | null>(null)
 const modelsRange = ref<TimeRange>('30d')
 const costRange = ref<TimeRange>('30d')
 const projectsRange = ref<TimeRange>('30d')
-
-const RANGE_LABELS: Record<TimeRange, string> = {
-  '7d': 'Last 7 days',
-  '30d': 'Last 30 days',
-  'mtd': 'This month',
-  'last_month': 'Last month',
-  'all': 'All time',
-}
-function rangeLabel(r: TimeRange): string {
-  return RANGE_LABELS[r] ?? r
-}
 
 const currentDate = computed(() => {
   const d = new Date()
