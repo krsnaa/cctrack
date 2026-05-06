@@ -28,3 +28,9 @@ worktrees/
 
 # Commit-message scratch file for sandbox-bounded commits (ephemeral).
 .commitmsg-*
+
+# Agent tool scaffolding (local, per-machine config; not for distribution)
+.codex/
+.gemini/
+.lets-all-chat/
+.mcp.json
