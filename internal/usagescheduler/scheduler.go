@@ -36,6 +36,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ksred/cctrack/internal/credentials"
@@ -103,6 +104,50 @@ const (
 // outer Run loop should exit." It never escapes the scheduler package.
 var errStop = errors.New("usagescheduler: permanent error, stopping")
 
+// ErrorClass classifies the most recent fetch failure (or none) the
+// scheduler has observed. The State accessor surfaces this for the
+// summary-augmentation derivation in internal/usagestate. Per F2 S2.3
+// EM ruling chat msg 20621: "Track only fixed enums + timestamps, not
+// raw error strings."
+type ErrorClass int
+
+const (
+	// ErrorClassNone means no error since the last successful fetch
+	// (or no fetch yet).
+	ErrorClassNone ErrorClass = iota
+	// ErrorClassCredentialsMissing maps to credentials.ErrCredentialsMissing.
+	ErrorClassCredentialsMissing
+	// ErrorClassTokenExpired maps to credentials.ErrTokenExpired.
+	ErrorClassTokenExpired
+	// ErrorClassCredentialsMalformed maps to credentials.ErrCredentialsMalformed.
+	ErrorClassCredentialsMalformed
+	// ErrorClassUnauthorized maps to usageprovider.ErrUnauthorized.
+	ErrorClassUnauthorized
+	// ErrorClassSchemaDrift maps to usageprovider.ErrSchemaDrift.
+	ErrorClassSchemaDrift
+	// ErrorClassProviderUnavailable maps to usageprovider.ErrProviderUnavailable.
+	ErrorClassProviderUnavailable
+	// ErrorClassRateLimited maps to usageprovider.ErrRateLimited.
+	ErrorClassRateLimited
+)
+
+// State is a race-safe snapshot of the scheduler's runtime state. It is
+// kept in memory only (no DB writes); on serve restart it begins empty
+// and is repopulated by the first tick. Per EM ruling chat msg 20621
+// option A: in-memory accessor, no scheduler_state table.
+type State struct {
+	// Running is true while Run() is in its main loop. Becomes false
+	// after Run returns (context canceled or permanent errStop).
+	Running bool
+	// LastFetchSucceeded is the wall-clock time of the most recent
+	// successful provider.Fetch. Zero if no fetch has succeeded since
+	// process start.
+	LastFetchSucceeded time.Time
+	// LastErrorClass is the classification of the most recent fetch
+	// failure. Reset to ErrorClassNone after a successful fetch.
+	LastErrorClass ErrorClass
+}
+
 // Scheduler is the main type. Construct via New; run via Run.
 type Scheduler struct {
 	provider         Provider
@@ -111,6 +156,10 @@ type Scheduler struct {
 	clock            Clock
 	log              Logger
 	onAnchorsUpdated OnAnchorsUpdated // optional; nil = no callback
+
+	// stateMu guards state. All reads via Snapshot() return a copy.
+	stateMu sync.Mutex
+	state   State
 }
 
 // New constructs a Scheduler with the supplied dependencies and
@@ -141,11 +190,49 @@ func (s *Scheduler) WithOnAnchorsUpdated(cb OnAnchorsUpdated) *Scheduler {
 	return s
 }
 
+// Snapshot returns a copy of the scheduler's current runtime state.
+// Safe to call concurrently with Run from any goroutine; readers see a
+// stable point-in-time snapshot. Used by internal/usagestate to derive
+// the per-window honest-state enum surfaced in /api/v1/summary.
+func (s *Scheduler) Snapshot() State {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	return s.state
+}
+
+// setRunning is called at Run() entry/exit to track the loop's
+// liveness. Mutex-protected for safe concurrent reads via Snapshot.
+func (s *Scheduler) setRunning(running bool) {
+	s.stateMu.Lock()
+	s.state.Running = running
+	s.stateMu.Unlock()
+}
+
+// recordFetchSuccess is called after a provider.Fetch returns nil. It
+// records the success time and clears any previous error class.
+func (s *Scheduler) recordFetchSuccess() {
+	s.stateMu.Lock()
+	s.state.LastFetchSucceeded = s.clock.Now()
+	s.state.LastErrorClass = ErrorClassNone
+	s.stateMu.Unlock()
+}
+
+// recordFetchError stores the typed error class for the most recent
+// fetch failure. Raw error strings are NEVER stored — only the fixed
+// enum, per EM ruling chat msg 20621.
+func (s *Scheduler) recordFetchError(class ErrorClass) {
+	s.stateMu.Lock()
+	s.state.LastErrorClass = class
+	s.stateMu.Unlock()
+}
+
 // Run blocks until ctx is canceled or a permanent error stops the loop.
 // On permanent errors (credentials missing/expired, unauthorized, schema
 // drift) the scheduler stops auto-refresh and returns. Transient errors
 // drive exponential backoff capped at backoffMax.
 func (s *Scheduler) Run(ctx context.Context) {
+	s.setRunning(true)
+	defer s.setRunning(false)
 	backoff := backoffInitial
 	for {
 		delay, err := s.tick(ctx)
@@ -192,13 +279,23 @@ func (s *Scheduler) Run(ctx context.Context) {
 func (s *Scheduler) tick(ctx context.Context) (time.Duration, error) {
 	creds, err := s.loadCreds()
 	if err != nil {
-		if errors.Is(err, credentials.ErrCredentialsMissing) ||
-			errors.Is(err, credentials.ErrTokenExpired) ||
-			errors.Is(err, credentials.ErrCredentialsMalformed) {
-			s.log("permanent credentials error: %v", err)
+		switch {
+		case errors.Is(err, credentials.ErrCredentialsMissing):
+			s.recordFetchError(ErrorClassCredentialsMissing)
+			s.log("permanent credentials error: missing")
 			return 0, errStop
+		case errors.Is(err, credentials.ErrTokenExpired):
+			s.recordFetchError(ErrorClassTokenExpired)
+			s.log("permanent credentials error: token expired")
+			return 0, errStop
+		case errors.Is(err, credentials.ErrCredentialsMalformed):
+			s.recordFetchError(ErrorClassCredentialsMalformed)
+			s.log("permanent credentials error: malformed")
+			return 0, errStop
+		default:
+			// Transient I/O error; do not classify.
+			return 0, fmt.Errorf("loadCreds: %w", err)
 		}
-		return 0, fmt.Errorf("loadCreds: %w", err)
 	}
 
 	snap, err := s.provider.Fetch(ctx, creds)
@@ -206,14 +303,27 @@ func (s *Scheduler) tick(ctx context.Context) (time.Duration, error) {
 		if errors.Is(err, ctx.Err()) {
 			return 0, ctx.Err()
 		}
-		if errors.Is(err, usageprovider.ErrUnauthorized) ||
-			errors.Is(err, usageprovider.ErrSchemaDrift) {
-			s.log("permanent provider error: %v", err)
+		switch {
+		case errors.Is(err, usageprovider.ErrUnauthorized):
+			s.recordFetchError(ErrorClassUnauthorized)
+			s.log("permanent provider error: unauthorized")
 			return 0, errStop
+		case errors.Is(err, usageprovider.ErrSchemaDrift):
+			s.recordFetchError(ErrorClassSchemaDrift)
+			s.log("permanent provider error: schema drift")
+			return 0, errStop
+		case errors.Is(err, usageprovider.ErrProviderUnavailable):
+			s.recordFetchError(ErrorClassProviderUnavailable)
+			return 0, err
+		case errors.Is(err, usageprovider.ErrRateLimited):
+			s.recordFetchError(ErrorClassRateLimited)
+			return 0, err
+		default:
+			// Untyped error: still surface as transient but don't classify.
+			return 0, err
 		}
-		// Transient: ErrProviderUnavailable, ErrRateLimited.
-		return 0, err
 	}
+	s.recordFetchSuccess()
 
 	// Write each window's anchor independently. A stale or per-window failure
 	// does not abort the other window; row writes are atomic at the DB layer

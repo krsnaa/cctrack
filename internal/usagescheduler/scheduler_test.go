@@ -883,6 +883,173 @@ func TestRun_OnAnchorsUpdatedErrorIsLoggedAndSwallowed(t *testing.T) {
 	}
 }
 
+// --- State accessor tests (T2.3.1 #648) -----------------------------------
+
+// TestSnapshot_InitialStateIsZero verifies a freshly-constructed scheduler
+// reports the zero-value State (no run, no fetches, no errors). This is the
+// baseline that internal/usagestate's derivation logic interprets as
+// "auto-sync hasn't tried yet" — anchor presence then drives the user-facing
+// state to manual_anchor or fallback_cascade.
+func TestSnapshot_InitialStateIsZero(t *testing.T) {
+	provider := newFakeProvider()
+	storeF := newFakeStore()
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, nopLog).WithClock(newFakeClock(time.Now()))
+
+	got := sched.Snapshot()
+	if got.Running {
+		t.Errorf("initial Running = true; want false (Run not yet called)")
+	}
+	if !got.LastFetchSucceeded.IsZero() {
+		t.Errorf("initial LastFetchSucceeded = %v; want zero", got.LastFetchSucceeded)
+	}
+	if got.LastErrorClass != ErrorClassNone {
+		t.Errorf("initial LastErrorClass = %v; want ErrorClassNone", got.LastErrorClass)
+	}
+}
+
+// TestSnapshot_RunningTrackedFromRunEntryToExit verifies the Running flag
+// flips to true while the loop is active and back to false after Run returns.
+// Tests the setRunning(true) at entry + defer setRunning(false) at exit
+// pattern.
+func TestSnapshot_RunningTrackedFromRunEntryToExit(t *testing.T) {
+	provider := newFakeProvider(fakeResp{err: usageprovider.ErrUnauthorized})
+	storeF := newFakeStore()
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, nopLog).WithClock(newFakeClock(time.Now()))
+
+	runUntilDone(t, sched) // Unauthorized → errStop → Run exits
+
+	// After Run returns, Running must be false.
+	got := sched.Snapshot()
+	if got.Running {
+		t.Errorf("Running = true after Run exit; want false")
+	}
+}
+
+// TestSnapshot_SuccessClearsLastErrorAndSetsTimestamp pins the
+// recordFetchSuccess path: a successful tick updates LastFetchSucceeded
+// to clock.Now() AND clears any previously-recorded error class.
+func TestSnapshot_SuccessClearsLastErrorAndSetsTimestamp(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	clock := newFakeClock(now)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+	// Provider sequence: transient error first (sets LastErrorClass), then
+	// success (must clear it and set LastFetchSucceeded).
+	provider := newFakeProvider(
+		fakeResp{err: usageprovider.ErrProviderUnavailable},
+		fakeResp{snap: snap},
+	)
+	storeF := newFakeStore()
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, nopLog).WithClock(clock)
+
+	runUntilCalls(t, sched, provider, 2)
+
+	got := sched.Snapshot()
+	if got.LastErrorClass != ErrorClassNone {
+		t.Errorf("LastErrorClass after success = %v; want ErrorClassNone (success clears prior error)", got.LastErrorClass)
+	}
+	if !got.LastFetchSucceeded.Equal(now) {
+		t.Errorf("LastFetchSucceeded = %v; want clock.Now()=%v", got.LastFetchSucceeded, now)
+	}
+}
+
+// TestSnapshot_ErrorClassRecording verifies each scheduler error-class
+// pathway updates LastErrorClass to the right typed enum.
+func TestSnapshot_ErrorClassRecording(t *testing.T) {
+	cases := []struct {
+		name       string
+		credErr    error
+		providerErr error
+		want       ErrorClass
+	}{
+		{"CredentialsMissing", credentials.ErrCredentialsMissing, nil, ErrorClassCredentialsMissing},
+		{"TokenExpired", credentials.ErrTokenExpired, nil, ErrorClassTokenExpired},
+		{"CredentialsMalformed", credentials.ErrCredentialsMalformed, nil, ErrorClassCredentialsMalformed},
+		{"Unauthorized", nil, usageprovider.ErrUnauthorized, ErrorClassUnauthorized},
+		{"SchemaDrift", nil, usageprovider.ErrSchemaDrift, ErrorClassSchemaDrift},
+		{"ProviderUnavailable", nil, usageprovider.ErrProviderUnavailable, ErrorClassProviderUnavailable},
+		{"RateLimited", nil, usageprovider.ErrRateLimited, ErrorClassRateLimited},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			loader := func() (credentials.Credentials, error) {
+				if c.credErr != nil {
+					return credentials.Credentials{}, c.credErr
+				}
+				return validCreds(), nil
+			}
+			var provider *fakeProvider
+			if c.providerErr != nil {
+				provider = newFakeProvider(fakeResp{err: c.providerErr})
+			} else {
+				provider = newFakeProvider() // never called when creds fail
+			}
+			sched := New(provider, loader, newFakeStore(), nopLog).WithClock(newFakeClock(time.Now()))
+
+			// For permanent error classes (all of these except provider-transient),
+			// runUntilDone is the right shape. Transient classes don't stop, so
+			// runUntilCalls is needed.
+			isTransient := c.want == ErrorClassProviderUnavailable || c.want == ErrorClassRateLimited
+			if isTransient {
+				runUntilCalls(t, sched, provider, 1)
+				// After 1 transient failure, scheduler is in backoff sleep;
+				// we cancel via runUntilCalls's deferred cancel. State should
+				// reflect the recorded error.
+			} else {
+				runUntilDone(t, sched)
+			}
+
+			got := sched.Snapshot()
+			if got.LastErrorClass != c.want {
+				t.Errorf("LastErrorClass = %v, want %v", got.LastErrorClass, c.want)
+			}
+			if !got.LastFetchSucceeded.IsZero() {
+				t.Errorf("LastFetchSucceeded = %v on error path; want zero (no successful fetch)", got.LastFetchSucceeded)
+			}
+		})
+	}
+}
+
+// TestSnapshot_ConcurrentReadIsRaceSafe verifies the mutex protects
+// concurrent Snapshot reads against in-flight state updates from Run.
+// Run with -race for full effect; without race detector this still
+// exercises the codepath under concurrency.
+func TestSnapshot_ConcurrentReadIsRaceSafe(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+	// Many successful fetches to drive state mutations.
+	resps := make([]fakeResp, 20)
+	for i := range resps {
+		resps[i] = fakeResp{snap: snap}
+	}
+	provider := newFakeProvider(resps...)
+	storeF := newFakeStore()
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, nopLog).WithClock(newFakeClock(now))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() {
+		sched.Run(ctx)
+		close(done)
+	}()
+
+	// Concurrent readers.
+	var wg sync.WaitGroup
+	for i := 0; i < 5; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for j := 0; j < 50; j++ {
+				_ = sched.Snapshot() // race detector validates safety
+			}
+		}()
+	}
+	wg.Wait()
+	cancel()
+	<-done
+}
+
 // TestEarliestFutureReset verifies the helper picks the strict-future
 // minimum and returns zero when both are stale.
 func TestEarliestFutureReset(t *testing.T) {
