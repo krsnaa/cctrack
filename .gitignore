@@ -1,5 +1,11 @@
-# Binary
-cctrack
+# Binary (root-anchored so cmd/usage-probe/ source dir is not ignored)
+/cctrack
+/usage-probe
+
+# Local Go caches used when the default ~/Library/Caches/go-build and
+# ~/go/pkg/mod paths are not writable (sandboxed environments).
+.gocache/
+.gomodcache/
 
 # Dependencies
 web/node_modules/
@@ -19,3 +25,6 @@ Thumbs.db
 
 # Worktrees
 worktrees/
+
+# Commit-message scratch file for sandbox-bounded commits (ephemeral).
+.commitmsg-*
