@@ -28,6 +28,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/summary", a.handleSummary)
 	mux.HandleFunc("GET /api/v1/sessions", a.handleSessions)
 	mux.HandleFunc("GET /api/v1/sessions/grouped", a.handleSessionsGrouped)
+	mux.HandleFunc("GET /api/v1/day-drilldown", a.handleDayDrilldown)
 	mux.HandleFunc("POST /api/v1/window-anchors", a.handlePostWindowAnchor)
 	mux.HandleFunc("GET /api/v1/window-anchors", a.handleListWindowAnchors)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", a.handleSession)
@@ -206,6 +207,24 @@ func (a *API) handleSessionsGrouped(w http.ResponseWriter, r *http.Request) {
 		"total":  len(groups),
 		"date":   date,
 	})
+}
+
+// handleDayDrilldown returns request-day spend grouped by project and session
+// for the given local date. Replaces the previous click-through path through
+// `/api/v1/sessions/grouped?date=...` (which surfaced session-lifetime
+// rollups, mismatching the daily-spend bar). See store.GetDayDrilldown.
+func (a *API) handleDayDrilldown(w http.ResponseWriter, r *http.Request) {
+	date := r.URL.Query().Get("date")
+	if err := store.ValidateDrilldownDate(date); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	drilldown, err := a.store.GetDayDrilldown(date)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, drilldown)
 }
 
 func (a *API) handleSession(w http.ResponseWriter, r *http.Request) {
