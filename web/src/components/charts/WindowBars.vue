@@ -3,13 +3,26 @@
     <div :class="['window-bar', w.barClass]" v-for="(w, i) in bars" :key="i">
       <div class="window-bar-head">
         <span class="window-bar-title">{{ w.title }}</span>
-        <span
-          v-if="w.stateBadge"
-          :class="['state-badge', w.stateBadgeClass]"
-          :title="w.stateTooltip"
-        >
-          <span class="state-dot" aria-hidden="true"></span>
-          {{ w.stateBadge }}
+        <span v-if="w.stateBadge" class="state-badge-wrap">
+          <button
+            :class="['state-badge', w.stateBadgeClass]"
+            :title="w.stateTooltip"
+            :aria-expanded="openIdx === i"
+            type="button"
+            @click.stop="togglePopover(i)"
+            @keydown.escape="openIdx = null"
+          >
+            <span class="state-dot" aria-hidden="true"></span>
+            {{ w.stateBadge }}
+          </button>
+          <div
+            v-if="openIdx === i"
+            class="state-popover"
+            role="dialog"
+            @click.stop
+          >
+            {{ w.stateTooltip }}
+          </div>
         </span>
         <span class="window-bar-meta">
           <span v-if="w.hasDenom" class="usage-pct">{{ w.usagePct.toFixed(1) }}%</span>
@@ -43,7 +56,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { WindowBucket } from '../../types'
 
@@ -51,6 +64,24 @@ const props = defineProps<{
   fiveHour: WindowBucket | null
   sevenDay: WindowBucket | null
 }>()
+
+// Tracks which bar's state-popover (if any) is currently open. Only one
+// popover at a time. Per F2 S2.3 PO direction (chat msg 20616): hover OR
+// click on the badge surfaces details. Hover is the native `title` attr;
+// click toggles a small popover via openIdx + document outside-click.
+const openIdx = ref<number | null>(null)
+function togglePopover(i: number) {
+  openIdx.value = openIdx.value === i ? null : i
+}
+function closePopover() {
+  openIdx.value = null
+}
+onMounted(() => {
+  document.addEventListener('click', closePopover)
+})
+onUnmounted(() => {
+  document.removeEventListener('click', closePopover)
+})
 
 function pctElapsed(start: string, end: string): number {
   if (!start || !end) return 0
@@ -359,7 +390,12 @@ const bars = computed(() => {
 /* F2 S2.3 honest-state badges. The badge sits in the bar head between the
    title and the metadata (usage %, pace, remaining). Only renders when
    stateBadge is non-empty — auto_fresh state and missing-state both render
-   the bar without a badge. */
+   the bar without a badge. The wrap is the positioning context for the
+   click-toggle popover. */
+.state-badge-wrap {
+  position: relative;
+  display: inline-flex;
+}
 .state-badge {
   display: inline-flex;
   align-items: center;
@@ -370,8 +406,40 @@ const bars = computed(() => {
   padding: 1px 6px;
   border-radius: 999px;
   letter-spacing: 0.04em;
-  cursor: help;  /* signals the tooltip on hover */
+  cursor: pointer;
   user-select: none;
+  background: transparent;
+  border: 1px solid transparent;
+  color: inherit;
+  font: inherit;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+.state-badge:focus-visible {
+  outline: 2px solid var(--amber-400);
+  outline-offset: 1px;
+}
+
+/* Click-toggle popover. Anchored to the badge wrap; one open at a time
+   (closes on outside click via document listener). Snap appearance — no
+   transition — per kiku's UX bar (msg 20616 E). */
+.state-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  background: var(--bg-elevated, var(--bg-base));
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  max-width: 280px;
+  width: max-content;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
 }
 .state-dot {
   width: 5px;
