@@ -27,9 +27,11 @@ package credentials
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"os/user"
@@ -173,27 +175,77 @@ func parseAndValidate(data []byte, now time.Time) (Credentials, error) {
 // requested item is absent (errSecItemNotFound surfaced as 44 by the CLI).
 const keychainItemNotFoundExitCode = 44
 
-// securityKeychainRead invokes `security find-generic-password` to fetch
-// the Claude Code credential blob. Shelling out keeps the package pure-Go
-// (no CGo / Security framework binding). The credential goes to stdout via
-// -w; errors go to stderr. cmd.Output captures stdout only, so wrapping
-// *exec.ExitError cannot leak the token.
+// securityBinaryPath is the fixed absolute path to macOS's bundled
+// `security` CLI. Using the fixed path avoids PATH-resolution hijack —
+// a malicious binary named `security` earlier in $PATH would otherwise
+// be invoked.
+const securityBinaryPath = "/usr/bin/security"
+
+// keychainReadTimeout caps a single keychain read. The real CLI returns
+// in milliseconds; anything slower is pathological (locked keychain,
+// blocked I/O) and we'd rather fail closed than block Load.
+const keychainReadTimeout = 5 * time.Second
+
+// maxKeychainOutputBytes bounds stdout. The credential JSON is ~1KB on
+// observed installs; 64KB is generous headroom and a hard ceiling that
+// prevents a malicious or buggy `security` from ballooning memory.
+const maxKeychainOutputBytes = 64 * 1024
+
+// securityKeychainRead invokes `/usr/bin/security find-generic-password`
+// to fetch the Claude Code credential blob. Shelling out keeps the
+// package pure-Go (no cgo / Security framework binding).
+//
+// Subprocess guardrails (binding per codex-2 chat msg 20559):
+//   - fixed binary path (securityBinaryPath); no PATH lookup
+//   - context-bound execution (keychainReadTimeout); guaranteed to
+//     return within the timeout even if `security` hangs
+//   - bounded stdout (maxKeychainOutputBytes); stdout is read through
+//     an io.LimitReader so the buffer cannot exceed the cap
+//
+// Errors are wrapped with the `security:` prefix and never include the
+// captured stdout bytes — `cmd.Output` captured only stdout (not stderr),
+// so the credential payload cannot leak through error strings.
 func securityKeychainRead() ([]byte, error) {
 	u, err := user.Current()
 	if err != nil {
 		return nil, fmt.Errorf("user lookup: %w", err)
 	}
-	cmd := exec.Command("security", "find-generic-password",
+
+	ctx, cancel := context.WithTimeout(context.Background(), keychainReadTimeout)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, securityBinaryPath, "find-generic-password",
 		"-s", keychainServiceName,
 		"-a", u.Username,
 		"-w")
-	out, err := cmd.Output()
+
+	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		return nil, fmt.Errorf("security: stdout pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("security: start: %w", err)
+	}
+
+	// Read at most maxKeychainOutputBytes+1 so we can detect overflow without
+	// allocating an unbounded buffer. The +1 lets us distinguish "exactly at
+	// the cap" from "exceeded the cap."
+	out, readErr := io.ReadAll(io.LimitReader(stdout, int64(maxKeychainOutputBytes)+1))
+	waitErr := cmd.Wait()
+
+	if len(out) > maxKeychainOutputBytes {
+		return nil, fmt.Errorf("security: output exceeded %d bytes", maxKeychainOutputBytes)
+	}
+	if waitErr != nil {
 		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) && exitErr.ExitCode() == keychainItemNotFoundExitCode {
+		if errors.As(waitErr, &exitErr) && exitErr.ExitCode() == keychainItemNotFoundExitCode {
 			return nil, os.ErrNotExist
 		}
-		return nil, fmt.Errorf("security: %w", err)
+		return nil, fmt.Errorf("security: %w", waitErr)
 	}
+	if readErr != nil {
+		return nil, fmt.Errorf("security: read: %w", readErr)
+	}
+
 	return bytes.TrimRight(out, "\r\n"), nil
 }

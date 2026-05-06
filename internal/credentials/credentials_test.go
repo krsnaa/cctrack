@@ -302,4 +302,3 @@ func TestLoadComposed(t *testing.T) {
 		})
 	}
 }
-
