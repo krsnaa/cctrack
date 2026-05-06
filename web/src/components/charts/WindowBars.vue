@@ -48,6 +48,8 @@
         <span v-if="w.syncedLabel" :class="['synced', { stale: w.syncStale }]">
           synced {{ w.syncedLabel }}
         </span>
+        <span v-if="w.capLabel" class="sep">·</span>
+        <span v-if="w.capLabel" class="cap-label">{{ w.capLabel }}</span>
         <span class="sep">·</span>
         <RouterLink to="/settings" class="resync-link">re-sync</RouterLink>
       </div>
@@ -134,6 +136,12 @@ interface Bar {
   stateBadgeClass: string  // CSS class for badge color (e.g. 'badge-warn', 'badge-error')
   stateTooltip: string     // hover/click popover text
   barClass: string         // CSS class applied to .window-bar (e.g. 'state-faded')
+  // F3 S3.1 imputed cap on resets line, between "synced X ago" and
+  // "re-sync". Empty when w.cap is null/zero so the surrounding
+  // separators don't render either ("·  ·" gap on un-synced bars).
+  // Format mirrors the existing tooltip wording "$X.XX of $Y.YY cap";
+  // the tilde signals "estimated/inferred."
+  capLabel: string         // e.g. "~$50.20 cap" or '' when no cap inferred
 }
 
 interface StateMeta {
@@ -251,6 +259,8 @@ function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): 
       : baseTooltip
 
   const meta = stateMetaFor(w.state)
+  // F3 S3.1: imputed cap label, omitted when no cap is inferred yet.
+  const capLabel = w.cap && w.cap > 0 ? `~$${w.cap.toFixed(2)} cap` : ''
   if (denom <= 0) {
     return {
       title, timePct, usagePct: 0, usageWidth: 0, hasDenom: false,
@@ -258,6 +268,7 @@ function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): 
       remaining, resetsAt, tooltip, syncedLabel, syncStale,
       stateBadge: meta.badge, stateBadgeClass: meta.badgeClass,
       stateTooltip: meta.tooltip, barClass: meta.barClass,
+      capLabel,
     }
   }
   const usagePct = (w.cost / denom) * 100
@@ -273,6 +284,7 @@ function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): 
     remaining, resetsAt, tooltip, syncedLabel, syncStale,
     stateBadge: meta.badge, stateBadgeClass: meta.badgeClass,
     stateTooltip: meta.tooltip, barClass: meta.barClass,
+    capLabel,
   }
 }
 
@@ -375,6 +387,10 @@ const bars = computed(() => {
 }
 .window-bar-resets .synced.stale {
   color: var(--cost-high);
+}
+.window-bar-resets .cap-label {
+  color: var(--text-tertiary);
+  font-variant-numeric: tabular-nums;
 }
 .resync-link {
   color: var(--text-tertiary);
