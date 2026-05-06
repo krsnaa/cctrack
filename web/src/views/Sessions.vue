@@ -69,7 +69,7 @@
               />
             </template>
           </template>
-          <tr v-if="!store.loading && !store.groups.length" class="empty-row">
+          <tr v-if="!store.loading && !store.error && !store.groups.length" class="empty-row">
             <td></td>
             <td colspan="5">No sessions{{ store.dateFilter ? ' on ' + dateFilterLabel : '' }}.</td>
           </tr>
