@@ -25,6 +25,11 @@ export interface WindowBucket {
   prev_start: string
   cap?: number | null
   last_synced_at?: string | null
+  // F2 S2.3 honest-state enum populated by usagestate.SummaryProvider on
+  // the backend. One of: auto_fresh, auto_stale, token_expired,
+  // provider_unavailable, manual_anchor, fallback_cascade, unknown.
+  // Optional: missing on older backends or when augmentation hasn't run.
+  state?: string
 }
 
 export interface WindowAnchor {
