@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 
 	"github.com/ksred/cctrack/internal/api"
 	"github.com/ksred/cctrack/internal/store"
+	"github.com/ksred/cctrack/internal/usagescheduler"
 )
 
 // minimal API harness for /api/v1/day-drilldown. The handler only reads
@@ -24,9 +26,12 @@ func newDrilldownHarness(t *testing.T) (*api.API, *store.Store) {
 		t.Fatalf("opening store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	// Drilldown tests don't exercise /api/v1/summary, so a stub SummaryFunc
-	// that returns the raw store summary is sufficient for api.New.
-	a := api.New(s, nil, nil, s.GetSummary)
+	// Drilldown tests don't exercise /api/v1/summary or /api/v1/usage-sync,
+	// so stub SummaryFunc + SyncOnceFunc are sufficient for api.New.
+	stubSync := func(ctx context.Context) usagescheduler.SyncStatus {
+		return usagescheduler.SyncStatus{Status: "ok"}
+	}
+	a := api.New(s, nil, nil, s.GetSummary, stubSync)
 	return a, s
 }
 

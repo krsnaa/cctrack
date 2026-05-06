@@ -37,6 +37,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ksred/cctrack/internal/credentials"
@@ -160,6 +161,52 @@ type Scheduler struct {
 	// stateMu guards state. All reads via Snapshot() return a copy.
 	stateMu sync.Mutex
 	state   State
+
+	// syncing single-flights work between the background Run loop and
+	// any SyncOnce caller. Acquired via CompareAndSwap so concurrent
+	// callers can detect contention without blocking.
+	syncing atomic.Bool
+}
+
+// SyncStatus is the small fixed-shape DTO returned by SyncOnce. Fields
+// are intentionally limited to what is safe to surface in API JSON
+// responses: a status enum string, an optional list of window types
+// whose anchors were freshly written, and an optional success
+// timestamp. No provider error strings, no credential bytes, no raw
+// response shape.
+type SyncStatus struct {
+	// Status is one of:
+	//   "ok"                       — fetch succeeded; anchors written (possibly empty).
+	//   "in_progress"              — another sync was already in flight.
+	//   "credentials_missing"      — ~/.claude/.credentials.json absent.
+	//   "token_expired"            — credentials parsed but expiresAt past.
+	//   "credentials_malformed"    — credentials present but unparseable.
+	//   "unauthorized"             — provider returned 401/403.
+	//   "schema_drift"             — provider response missing / wrong-typed required fields.
+	//   "provider_unavailable"     — transport / 5xx / context.
+	//   "rate_limited"             — provider returned 429.
+	Status         string   `json:"status"`
+	WindowsWritten []string `json:"windows_written,omitempty"`
+	SyncedAt       *string  `json:"synced_at,omitempty"` // RFC3339Nano UTC; only on Status=="ok"
+}
+
+// runOnceResult carries the outcome of one fetch+write cycle. Used by
+// both the background tick (to compute next-delay or classify error)
+// and SyncOnce (to map into SyncStatus).
+type runOnceResult struct {
+	// Snapshot is populated only on a successful provider.Fetch.
+	Snapshot       usageprovider.Snapshot
+	// AnchorsWritten lists window types ("5h", "7d") whose
+	// SaveWindowAnchor returned successfully this cycle. Possibly empty
+	// even on success (e.g., both windows had stale resets_at).
+	AnchorsWritten []string
+	// ErrorClass is the typed enum equivalent of Err for the runtime
+	// state surface and SyncStatus mapping. ErrorClassNone on success.
+	ErrorClass ErrorClass
+	// Err is the underlying error (errStop / transient / context
+	// cancellation). The background tick consumes this directly; SyncOnce
+	// maps via ErrorClass.
+	Err error
 }
 
 // New constructs a Scheduler with the supplied dependencies and
@@ -271,68 +318,104 @@ func (s *Scheduler) Run(ctx context.Context) {
 	}
 }
 
-// tick performs one fetch + write cycle. Returns (delayUntilNextFetch, err).
-//   - On success: delay is the time until the earliest observed reset + grace.
-//   - On a permanent error class: returns (0, errStop). Outer Run exits.
-//   - On a transient error: returns (0, transientErr). Outer Run backs off.
-//   - On context cancellation during sleep/fetch: returns (0, ctx.Err()).
-func (s *Scheduler) tick(ctx context.Context) (time.Duration, error) {
+// runOnce performs one fetch + write cycle and returns the typed result.
+// Both the background tick (for next-delay / errStop classification) and
+// SyncOnce (for SyncStatus mapping) share this path so they cannot drift.
+//
+// The function records typed error classes onto the scheduler state so
+// /api/v1/summary and the dashboard's honest-state badges reflect the
+// most recent classification regardless of which entry point ran the
+// cycle. On a successful fetch, recordFetchSuccess clears any prior
+// error class.
+func (s *Scheduler) runOnce(ctx context.Context) runOnceResult {
 	creds, err := s.loadCreds()
 	if err != nil {
 		switch {
 		case errors.Is(err, credentials.ErrCredentialsMissing):
 			s.recordFetchError(ErrorClassCredentialsMissing)
 			s.log("permanent credentials error: missing")
-			return 0, errStop
+			return runOnceResult{ErrorClass: ErrorClassCredentialsMissing, Err: errStop}
 		case errors.Is(err, credentials.ErrTokenExpired):
 			s.recordFetchError(ErrorClassTokenExpired)
 			s.log("permanent credentials error: token expired")
-			return 0, errStop
+			return runOnceResult{ErrorClass: ErrorClassTokenExpired, Err: errStop}
 		case errors.Is(err, credentials.ErrCredentialsMalformed):
 			s.recordFetchError(ErrorClassCredentialsMalformed)
 			s.log("permanent credentials error: malformed")
-			return 0, errStop
+			return runOnceResult{ErrorClass: ErrorClassCredentialsMalformed, Err: errStop}
 		default:
 			// Transient I/O error; do not classify.
-			return 0, fmt.Errorf("loadCreds: %w", err)
+			return runOnceResult{Err: fmt.Errorf("loadCreds: %w", err)}
 		}
 	}
 
 	snap, err := s.provider.Fetch(ctx, creds)
 	if err != nil {
 		if errors.Is(err, ctx.Err()) {
-			return 0, ctx.Err()
+			return runOnceResult{Err: ctx.Err()}
 		}
 		switch {
 		case errors.Is(err, usageprovider.ErrUnauthorized):
 			s.recordFetchError(ErrorClassUnauthorized)
 			s.log("permanent provider error: unauthorized")
-			return 0, errStop
+			return runOnceResult{ErrorClass: ErrorClassUnauthorized, Err: errStop}
 		case errors.Is(err, usageprovider.ErrSchemaDrift):
 			s.recordFetchError(ErrorClassSchemaDrift)
 			s.log("permanent provider error: schema drift")
-			return 0, errStop
+			return runOnceResult{ErrorClass: ErrorClassSchemaDrift, Err: errStop}
 		case errors.Is(err, usageprovider.ErrProviderUnavailable):
 			s.recordFetchError(ErrorClassProviderUnavailable)
-			return 0, err
+			return runOnceResult{ErrorClass: ErrorClassProviderUnavailable, Err: err}
 		case errors.Is(err, usageprovider.ErrRateLimited):
 			s.recordFetchError(ErrorClassRateLimited)
-			return 0, err
+			return runOnceResult{ErrorClass: ErrorClassRateLimited, Err: err}
 		default:
 			// Untyped error: still surface as transient but don't classify.
-			return 0, err
+			return runOnceResult{Err: err}
 		}
 	}
 	s.recordFetchSuccess()
 
 	// Write each window's anchor independently. A stale or per-window failure
 	// does not abort the other window; row writes are atomic at the DB layer
-	// (SaveWindowAnchor is one INSERT). Track whether AT LEAST ONE write
-	// succeeded so the post-tick callback can fire if state changed.
-	fiveOK := s.writeAnchorIfFresh(snap, "5h", snap.FiveHourResetsAt)
-	sevenOK := s.writeAnchorIfFresh(snap, "7d", snap.SevenDayResetsAt)
-	if fiveOK || sevenOK {
+	// (SaveWindowAnchor is one INSERT). Track which windows wrote so the
+	// post-cycle callback fires only when state actually changed.
+	var written []string
+	if s.writeAnchorIfFresh(snap, "5h", snap.FiveHourResetsAt) {
+		written = append(written, "5h")
+	}
+	if s.writeAnchorIfFresh(snap, "7d", snap.SevenDayResetsAt) {
+		written = append(written, "7d")
+	}
+	if len(written) > 0 {
 		s.invokeOnAnchorsUpdated(ctx)
+	}
+	return runOnceResult{Snapshot: snap, AnchorsWritten: written}
+}
+
+// tick performs one fetch + write cycle and computes the next scheduled
+// wake. Returns (delayUntilNextFetch, err):
+//   - On success: delay is the time until the earliest observed reset + grace.
+//   - On a permanent error class: returns (0, errStop). Outer Run exits.
+//   - On a transient error: returns (0, transientErr). Outer Run backs off.
+//   - On context cancellation during sleep/fetch: returns (0, ctx.Err()).
+//
+// Single-flight: if SyncOnce is currently in flight (manual button), the
+// tick yields its slot and returns a benign next-delay. The CAS-loss is
+// NOT classified as a provider failure (per EM ruling chat 20726
+// amendment 1) — honest-state stays untouched and the next scheduled
+// wake fires normally.
+func (s *Scheduler) tick(ctx context.Context) (time.Duration, error) {
+	if !s.syncing.CompareAndSwap(false, true) {
+		// SyncOnce in flight — back off briefly and retry. Do not log,
+		// do not record any error class, do not change honest-state.
+		return backoffInitial, nil
+	}
+	defer s.syncing.Store(false)
+
+	result := s.runOnce(ctx)
+	if result.Err != nil {
+		return 0, result.Err
 	}
 
 	// Schedule the next fetch at the EARLIEST observed reset + grace. If
@@ -340,7 +423,7 @@ func (s *Scheduler) tick(ctx context.Context) (time.Duration, error) {
 	// constraint #7 (no periodic polling) and the spirit of constraint #6
 	// (no fabricating boundaries), this is a stop class — fall back to
 	// manual sync until the next process restart.
-	next := earliestFutureReset(snap)
+	next := earliestFutureReset(result.Snapshot)
 	if next.IsZero() {
 		s.log("both windows have non-future resets; stopping auto-refresh")
 		return 0, errStop
@@ -350,6 +433,58 @@ func (s *Scheduler) tick(ctx context.Context) (time.Duration, error) {
 		delay = 0
 	}
 	return delay, nil
+}
+
+// SyncOnce performs one fetch + write cycle synchronously and returns
+// the user-visible SyncStatus. Reuses runOnce so its behavior is
+// indistinguishable from a background tick except in the single-flight
+// contention case.
+//
+// Single-flight: if a tick or another SyncOnce is currently in flight,
+// returns SyncStatus{Status: "in_progress"} immediately without
+// blocking the caller or starting a duplicate provider fetch. Repeated
+// rapid clicks therefore short-circuit cleanly rather than queueing.
+//
+// Wired to POST /api/v1/usage-sync via the cmd/serve injection of
+// sched.SyncOnce into api.New.
+func (s *Scheduler) SyncOnce(ctx context.Context) SyncStatus {
+	if !s.syncing.CompareAndSwap(false, true) {
+		return SyncStatus{Status: "in_progress"}
+	}
+	defer s.syncing.Store(false)
+
+	result := s.runOnce(ctx)
+
+	// Map typed error class first so each enum value gets a stable
+	// status string. ErrorClassNone falls through to the success path.
+	switch result.ErrorClass {
+	case ErrorClassCredentialsMissing:
+		return SyncStatus{Status: "credentials_missing"}
+	case ErrorClassTokenExpired:
+		return SyncStatus{Status: "token_expired"}
+	case ErrorClassCredentialsMalformed:
+		return SyncStatus{Status: "credentials_malformed"}
+	case ErrorClassUnauthorized:
+		return SyncStatus{Status: "unauthorized"}
+	case ErrorClassSchemaDrift:
+		return SyncStatus{Status: "schema_drift"}
+	case ErrorClassProviderUnavailable:
+		return SyncStatus{Status: "provider_unavailable"}
+	case ErrorClassRateLimited:
+		return SyncStatus{Status: "rate_limited"}
+	}
+	// ErrorClassNone — but result.Err may still be non-nil for untyped
+	// transient (loadCreds I/O) or context cancellation. Map both to
+	// provider_unavailable so the user sees a recoverable state.
+	if result.Err != nil {
+		return SyncStatus{Status: "provider_unavailable"}
+	}
+	syncedAt := s.clock.Now().UTC().Format(time.RFC3339Nano)
+	return SyncStatus{
+		Status:         "ok",
+		WindowsWritten: result.AnchorsWritten,
+		SyncedAt:       &syncedAt,
+	}
 }
 
 // writeAnchorIfFresh validates the window's resets_at vs observed_at and

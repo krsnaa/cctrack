@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -12,24 +13,31 @@ import (
 	"github.com/ksred/cctrack/internal/config"
 	"github.com/ksred/cctrack/internal/hub"
 	"github.com/ksred/cctrack/internal/store"
+	"github.com/ksred/cctrack/internal/usagescheduler"
 )
 
-// SummaryFunc returns the augmented summary payload for /api/v1/summary
-// and the websocket-initial broadcast. cmd/serve wires this to
-// usagestate.SummaryProvider.Build so the per-window honest-state fields
-// are populated. Per F2 S2.3 EM ruling chat msg 20621: every summary
-// emission path must use the same augmentation chokepoint.
+// SummaryFunc returns the augmented summary payload for the dashboard
+// summary endpoint and the websocket-initial broadcast. cmd/serve wires
+// this to a SummaryProvider so per-window honest-state fields are
+// populated at every emission path through the same chokepoint.
 type SummaryFunc func() (*store.Summary, error)
+
+// SyncOnceFunc runs one provider fetch + anchor write cycle and returns
+// the user-facing status DTO. cmd/serve wires this to the scheduler's
+// SyncOnce method so the API and the background scheduler share the
+// same code path; the scheduler stays free of api/hub imports.
+type SyncOnceFunc func(ctx context.Context) usagescheduler.SyncStatus
 
 type API struct {
 	store      *store.Store
 	hub        *hub.Hub
 	cfg        *config.Config
 	getSummary SummaryFunc
+	syncOnce   SyncOnceFunc
 }
 
-func New(s *store.Store, h *hub.Hub, cfg *config.Config, getSummary SummaryFunc) *API {
-	return &API{store: s, hub: h, cfg: cfg, getSummary: getSummary}
+func New(s *store.Store, h *hub.Hub, cfg *config.Config, getSummary SummaryFunc, syncOnce SyncOnceFunc) *API {
+	return &API{store: s, hub: h, cfg: cfg, getSummary: getSummary, syncOnce: syncOnce}
 }
 
 func (a *API) RegisterRoutes(mux *http.ServeMux) {
@@ -39,6 +47,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/v1/day-drilldown", a.handleDayDrilldown)
 	mux.HandleFunc("POST /api/v1/window-anchors", a.handlePostWindowAnchor)
 	mux.HandleFunc("GET /api/v1/window-anchors", a.handleListWindowAnchors)
+	mux.HandleFunc("POST /api/v1/usage-sync", a.handleUsageSync)
 	mux.HandleFunc("GET /api/v1/sessions/{id}", a.handleSession)
 	mux.HandleFunc("GET /api/v1/recent", a.handleRecent)
 	mux.HandleFunc("GET /api/v1/daily", a.handleDaily)
@@ -173,6 +182,16 @@ func (a *API) handlePostWindowAnchor(w http.ResponseWriter, r *http.Request) {
 		"id":     id,
 		"anchor": saved,
 	})
+}
+
+// handleUsageSync triggers one provider fetch via the injected
+// scheduler.SyncOnce and returns the sanitized SyncStatus DTO. The
+// scheduler enforces single-flight: repeated rapid calls return
+// Status="in_progress" without starting a duplicate provider fetch
+// or overlapping with the background scheduler tick.
+func (a *API) handleUsageSync(w http.ResponseWriter, r *http.Request) {
+	status := a.syncOnce(r.Context())
+	writeJSON(w, status)
 }
 
 func (a *API) handleListWindowAnchors(w http.ResponseWriter, r *http.Request) {

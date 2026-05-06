@@ -883,6 +883,262 @@ func TestRun_OnAnchorsUpdatedErrorIsLoggedAndSwallowed(t *testing.T) {
 	}
 }
 
+// --- SyncOnce tests (F7 T7.1) -----------------------------------
+
+func TestSyncOnce_HappyPathReturnsOkWithWindowsWritten(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+	provider := newFakeProvider(fakeResp{snap: snap})
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, newFakeStore(), nopLog).WithClock(newFakeClock(now))
+
+	got := sched.SyncOnce(context.Background())
+	if got.Status != "ok" {
+		t.Errorf("Status = %q, want \"ok\"", got.Status)
+	}
+	if len(got.WindowsWritten) != 2 {
+		t.Errorf("WindowsWritten = %v, want both 5h and 7d", got.WindowsWritten)
+	}
+	if got.SyncedAt == nil || *got.SyncedAt == "" {
+		t.Errorf("SyncedAt = %v, want populated RFC3339Nano timestamp", got.SyncedAt)
+	}
+}
+
+// TestSyncOnce_TokenExpiredFromCredentials maps credentials.ErrTokenExpired
+// to status "token_expired" — DISTINCT from "unauthorized" per EM
+// amendment #2 (chat msg 20726). Credential-loader expiration is the case
+// where the user reauthenticates Claude Code.
+func TestSyncOnce_TokenExpiredFromCredentials(t *testing.T) {
+	loader := func() (credentials.Credentials, error) {
+		return credentials.Credentials{}, credentials.ErrTokenExpired
+	}
+	sched := New(newFakeProvider(), loader, newFakeStore(), nopLog).WithClock(newFakeClock(time.Now()))
+	got := sched.SyncOnce(context.Background())
+	if got.Status != "token_expired" {
+		t.Errorf("Status = %q, want \"token_expired\"", got.Status)
+	}
+	if got.WindowsWritten != nil || got.SyncedAt != nil {
+		t.Errorf("non-nil WindowsWritten/SyncedAt on error path: %+v", got)
+	}
+}
+
+// TestSyncOnce_UnauthorizedFromProvider maps provider.ErrUnauthorized to
+// "unauthorized" — DISTINCT from "token_expired". Provider 401/403 means
+// the token reached Anthropic but was rejected (revoked, scope mismatch).
+func TestSyncOnce_UnauthorizedFromProvider(t *testing.T) {
+	provider := newFakeProvider(fakeResp{err: usageprovider.ErrUnauthorized})
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, newFakeStore(), nopLog).WithClock(newFakeClock(time.Now()))
+	if got := sched.SyncOnce(context.Background()); got.Status != "unauthorized" {
+		t.Errorf("Status = %q, want \"unauthorized\"", got.Status)
+	}
+}
+
+func TestSyncOnce_CredentialsMissing(t *testing.T) {
+	loader := func() (credentials.Credentials, error) {
+		return credentials.Credentials{}, credentials.ErrCredentialsMissing
+	}
+	sched := New(newFakeProvider(), loader, newFakeStore(), nopLog).WithClock(newFakeClock(time.Now()))
+	if got := sched.SyncOnce(context.Background()); got.Status != "credentials_missing" {
+		t.Errorf("Status = %q, want \"credentials_missing\"", got.Status)
+	}
+}
+
+func TestSyncOnce_CredentialsMalformed(t *testing.T) {
+	loader := func() (credentials.Credentials, error) {
+		return credentials.Credentials{}, credentials.ErrCredentialsMalformed
+	}
+	sched := New(newFakeProvider(), loader, newFakeStore(), nopLog).WithClock(newFakeClock(time.Now()))
+	if got := sched.SyncOnce(context.Background()); got.Status != "credentials_malformed" {
+		t.Errorf("Status = %q, want \"credentials_malformed\"", got.Status)
+	}
+}
+
+func TestSyncOnce_SchemaDrift(t *testing.T) {
+	provider := newFakeProvider(fakeResp{err: usageprovider.ErrSchemaDrift})
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, newFakeStore(), nopLog).WithClock(newFakeClock(time.Now()))
+	if got := sched.SyncOnce(context.Background()); got.Status != "schema_drift" {
+		t.Errorf("Status = %q, want \"schema_drift\"", got.Status)
+	}
+}
+
+func TestSyncOnce_ProviderUnavailable(t *testing.T) {
+	provider := newFakeProvider(fakeResp{err: usageprovider.ErrProviderUnavailable})
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, newFakeStore(), nopLog).WithClock(newFakeClock(time.Now()))
+	if got := sched.SyncOnce(context.Background()); got.Status != "provider_unavailable" {
+		t.Errorf("Status = %q, want \"provider_unavailable\"", got.Status)
+	}
+}
+
+func TestSyncOnce_RateLimited(t *testing.T) {
+	provider := newFakeProvider(fakeResp{err: usageprovider.ErrRateLimited})
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, newFakeStore(), nopLog).WithClock(newFakeClock(time.Now()))
+	if got := sched.SyncOnce(context.Background()); got.Status != "rate_limited" {
+		t.Errorf("Status = %q, want \"rate_limited\"", got.Status)
+	}
+}
+
+// TestSyncOnce_OkWithEmptyWindowsWritten validates EM amendment 3 (chat msg
+// 20726): a successful fetch where both windows had stale resets_at
+// produces Status=ok with empty WindowsWritten, NOT a provider failure.
+// The fetch itself succeeded; nothing was fresher to write.
+func TestSyncOnce_OkWithEmptyWindowsWritten(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	snap := usageprovider.Snapshot{
+		FiveHourUtilizationPercent: 1,
+		SevenDayUtilizationPercent: 2,
+		FiveHourResetsAt:           now.Add(-1 * time.Minute),
+		SevenDayResetsAt:           now.Add(-2 * time.Minute),
+		Observed:                   now,
+	}
+	provider := newFakeProvider(fakeResp{snap: snap})
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, newFakeStore(), nopLog).WithClock(newFakeClock(now))
+
+	got := sched.SyncOnce(context.Background())
+	if got.Status != "ok" {
+		t.Errorf("Status = %q, want \"ok\" (fetch succeeded; no anchor was fresher)", got.Status)
+	}
+	if len(got.WindowsWritten) != 0 {
+		t.Errorf("WindowsWritten = %v, want empty (both windows stale)", got.WindowsWritten)
+	}
+	if got.SyncedAt == nil {
+		t.Error("SyncedAt is nil; want populated on Status=ok even with empty windows_written")
+	}
+}
+
+// TestSyncOnce_ConcurrentDoubleClickReturnsInProgress validates the
+// single-flight contract: two simultaneous SyncOnce calls — one wins
+// the CAS and runs the fetch, the other returns Status="in_progress"
+// immediately without starting a duplicate Fetch.
+//
+// Uses a started/release barrier to deterministically hold the first
+// SyncOnce inside Fetch while the test fires the second call.
+func TestSyncOnce_ConcurrentDoubleClickReturnsInProgress(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+
+	var fetchCount int32
+	started := make(chan struct{})
+	release := make(chan struct{})
+	provider := &recordingProvider{
+		fakeProvider: newFakeProvider(fakeResp{snap: snap}, fakeResp{snap: snap}),
+		onCall: func() (start, end time.Time) {
+			atomic.AddInt32(&fetchCount, 1)
+			// Only the first caller signals started; subsequent calls
+			// would have already short-circuited at the CAS check.
+			select {
+			case <-started: // already closed: do nothing
+			default:
+				close(started)
+			}
+			<-release
+			return time.Now(), time.Now()
+		},
+	}
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, newFakeStore(), nopLog).WithClock(newFakeClock(now))
+
+	firstResult := make(chan SyncStatus, 1)
+	go func() {
+		firstResult <- sched.SyncOnce(context.Background())
+	}()
+
+	// Wait for the first call to acquire syncing and enter Fetch.
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("first SyncOnce did not reach Fetch within 1s")
+	}
+
+	// While first is held inside onCall (release not yet closed), the
+	// CAS in the second call must fail, returning in_progress without
+	// reaching the provider.
+	secondResult := sched.SyncOnce(context.Background())
+	if secondResult.Status != "in_progress" {
+		t.Errorf("second SyncOnce returned %q, want \"in_progress\" (single-flight)", secondResult.Status)
+	}
+
+	close(release)
+	first := <-firstResult
+	if first.Status != "ok" {
+		t.Errorf("first SyncOnce returned %q, want \"ok\"", first.Status)
+	}
+
+	if got := atomic.LoadInt32(&fetchCount); got != 1 {
+		t.Errorf("provider.Fetch entered %d times, want exactly 1 (single-flight prevented duplicate)", got)
+	}
+}
+
+// TestSyncOnce_TickCASLossIsBenign validates EM amendment 1 (chat msg
+// 20726): when SyncOnce holds the syncing flag, a scheduled tick that
+// loses the CAS must NOT classify as a provider failure. No error class
+// change, no transient-error log, no honest-state poisoning. The tick
+// returns a benign next-delay and the next scheduled wake fires normally.
+//
+// Uses a started/release barrier so the SyncOnce goroutine deterministically
+// holds the syncing flag while the test exercises tick — without the
+// barrier the test races against SyncOnce's completion.
+func TestSyncOnce_TickCASLossIsBenign(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	clock := newFakeClock(now)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+
+	var (
+		logMu  sync.Mutex
+		logBuf []string
+	)
+	captureLog := func(format string, args ...any) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		logBuf = append(logBuf, fmt.Sprintf(format, args...))
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	provider := &recordingProvider{
+		fakeProvider: newFakeProvider(fakeResp{snap: snap}),
+		onCall: func() (start, end time.Time) {
+			close(started)
+			<-release // block until test releases
+			return time.Now(), time.Now()
+		},
+	}
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, newFakeStore(), captureLog).WithClock(clock)
+
+	syncDone := make(chan SyncStatus, 1)
+	go func() {
+		syncDone <- sched.SyncOnce(context.Background())
+	}()
+
+	// Wait for SyncOnce to acquire the syncing flag and enter Fetch.
+	select {
+	case <-started:
+	case <-time.After(time.Second):
+		t.Fatal("SyncOnce did not reach Fetch within 1s")
+	}
+
+	preState := sched.Snapshot()
+	delay, err := sched.tick(context.Background())
+	if err != nil {
+		t.Errorf("tick returned err = %v on CAS loss; want nil (benign)", err)
+	}
+	if delay <= 0 {
+		t.Errorf("tick returned delay = %v on CAS loss; want positive (benign next-delay)", delay)
+	}
+	postState := sched.Snapshot()
+	if postState.LastErrorClass != preState.LastErrorClass {
+		t.Errorf("tick CAS-loss changed LastErrorClass from %v to %v; want unchanged", preState.LastErrorClass, postState.LastErrorClass)
+	}
+
+	logMu.Lock()
+	for _, line := range logBuf {
+		if strings.Contains(line, "transient error") || strings.Contains(line, "permanent") {
+			t.Errorf("tick CAS-loss logged %q; want no error/transient log", line)
+		}
+	}
+	logMu.Unlock()
+
+	close(release)
+	<-syncDone
+}
+
 // --- State accessor tests (T2.3.1 #648) -----------------------------------
 
 // TestSnapshot_InitialStateIsZero verifies a freshly-constructed scheduler
