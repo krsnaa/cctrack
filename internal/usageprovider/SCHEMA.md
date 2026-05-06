@@ -31,15 +31,27 @@ fields are truly time-state vs. account-shaped.
 
        go run -tags discovery ./cmd/usage-probe
 
-2. Inspect the sanitized stdout. The probe prints field names + JSON types
-   only; values are elided for everything except the two allowlisted
-   utilization paths. Names matching a defensive substring allowlist of
-   generic auth/account vocabulary are redacted in the output (the list
-   is in `cmd/usage-probe/main.go` as enforcement-only logic).
+2. Inspect the stdout. Per T2.1.5.1's inverse-allowlist model, the probe
+   emits one line per allowlisted exact path only — `name + type +
+   presence` for each of the four cctrack-used fields. Every other
+   response field name and value is silently dropped (no `<redacted>`
+   markers, no value previews, no nested-object enumeration). An
+   allowlisted path that is missing from the response is reported as
+   `MISSING`; one with the wrong JSON type is reported as
+   `TYPE_MISMATCH`. The probe exits with status 3 on either condition
+   so a future CI gate can detect schema drift mechanically.
 
-3. **Do not paste probe output into chat or commit it.** If a candidate
-   new field is observed, add it to the table above by hand with an
-   explicit note about why surfacing its value is non-sensitive.
+3. **The output above is the complete signal.** If you need to expand
+   the allowlist, the binding contract is in this file (SCHEMA.md);
+   `cmd/usage-probe/walk.go` and `internal/usageprovider/provider.go`
+   must both be kept aligned to it. Verifier checks for drift on every
+   slice that touches usageprovider.
+
+4. **Do not paste probe output into chat or commit raw stdout.** Even
+   though the probe by construction does not emit non-allowlisted
+   names, treat the output as a working artifact, not a documentation
+   surface — when extending the allowlist, edit SCHEMA.md by hand with
+   an explicit note about why surfacing the new field is non-sensitive.
 
 ## Hard rules (binding per F2 S2.1 + S2.2 verifier bars)
 

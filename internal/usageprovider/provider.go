@@ -7,11 +7,16 @@
 // error so the dashboard can render a "provider unavailable" state and
 // fall back to manual sync without partial trust.
 //
-// Field allowlist (binding per F2 S2.1 ruling):
+// Field allowlist (binding per F2 S2.1 + S2.2 rulings):
 //   - five_hour.utilization
+//   - five_hour.resets_at
 //   - seven_day.utilization
+//   - seven_day.resets_at
 // Any other response fields are ignored without enumeration: not parsed,
-// not surfaced, and not logged. Unknown extras are not treated as drift.
+// not surfaced, and not logged. Unknown extras are not treated as drift;
+// missing or malformed allowlisted fields fail closed with ErrSchemaDrift.
+// `resets_at` strings are parsed as RFC3339 / RFC3339Nano only (regex
+// pre-check defeats Go's generic-layout parser fallback).
 // SCHEMA.md is the authoritative committed allowlist.
 package usageprovider
 
