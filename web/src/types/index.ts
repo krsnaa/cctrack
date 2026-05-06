@@ -126,6 +126,39 @@ export interface ProjectGroupsResponse {
   date?: string
 }
 
+// Day drilldown — request-day spend for a local YYYY-MM-DD. Mirrors the
+// Go-side store.DayDrilldown / DayProjectGroup / DaySessionRow shape from
+// internal/store/drilldown.go. day_cost / day_tokens / day_request_count are
+// scoped to requests with timestamp on the given local day; lifetime_cost on
+// each session is the session's full sessions.total_cost (separate from the
+// day-scoped sums, never folded into them).
+export interface DayProjectGroup {
+  project: string
+  day_cost: number
+  day_tokens: number
+  session_count: number
+  day_request_count: number
+}
+
+export interface DaySessionRow {
+  id: string
+  project: string
+  slug: string
+  model: string
+  started_at: string
+  last_activity: string
+  day_cost: number
+  day_tokens: number
+  day_request_count: number
+  lifetime_cost: number
+}
+
+export interface DayDrilldown {
+  date: string
+  projects: DayProjectGroup[]
+  sessions: DaySessionRow[]
+}
+
 export interface Settings {
   log_dir: string
   db_path: string
