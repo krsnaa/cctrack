@@ -15,9 +15,12 @@ import (
 
 	"github.com/ksred/cctrack/internal/api"
 	"github.com/ksred/cctrack/internal/config"
+	"github.com/ksred/cctrack/internal/credentials"
 	"github.com/ksred/cctrack/internal/hub"
 	"github.com/ksred/cctrack/internal/parser"
 	"github.com/ksred/cctrack/internal/store"
+	"github.com/ksred/cctrack/internal/usageprovider"
+	"github.com/ksred/cctrack/internal/usagescheduler"
 	"github.com/ksred/cctrack/internal/watcher"
 	"github.com/spf13/cobra"
 )
@@ -115,6 +118,34 @@ var serveCmd = &cobra.Command{
 		// Graceful shutdown
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
+
+		// Auto-sync scheduler (F2 S2.2): refresh window_anchors rows from
+		// /api/oauth/usage in the background. Stops auto-refresh cleanly on
+		// permanent errors (credentials missing/expired, unauthorized, schema
+		// drift); the manual-sync POST /api/v1/window-anchors flow remains
+		// available as fallback. The scheduler shares its observed-cost math
+		// with the manual-sync handler via store.ObservedCostForWindow, so the
+		// two flows cannot drift.
+		schedProvider := usageprovider.New()
+		schedLogger := func(format string, args ...any) {
+			log.Printf("usagescheduler: "+format, args...)
+		}
+		sched := usagescheduler.New(schedProvider, credentials.Load, s, schedLogger)
+		schedDone := make(chan struct{})
+		go func() {
+			sched.Run(ctx)
+			close(schedDone)
+		}()
+		// On shutdown the scheduler observes ctx.Done() inside Run and exits
+		// cleanly; the deferred wait is bounded so a hung scheduler can't block
+		// process exit indefinitely.
+		defer func() {
+			select {
+			case <-schedDone:
+			case <-time.After(5 * time.Second):
+				log.Println("usagescheduler: did not exit within 5s of shutdown")
+			}
+		}()
 
 		go func() {
 			<-ctx.Done()
