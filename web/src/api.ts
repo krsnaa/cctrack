@@ -127,3 +127,23 @@ export async function postWindowAnchor(
   if (!res.ok) throw new Error(`API error: ${res.status}`)
   return res.json()
 }
+
+// SyncStatus mirrors the backend SyncStatus DTO. Status is a fixed enum
+// string; windows_written is the list of window types whose anchors were
+// freshly written; synced_at is RFC3339Nano UTC and present only on
+// status="ok". Failure status values surface through the dashboard's
+// honest-state badges (no parallel toast/error UI).
+export interface SyncStatus {
+  status: string
+  windows_written?: string[]
+  synced_at?: string
+}
+
+// triggerUsageSync POSTs to /api/v1/usage-sync and returns the sanitized
+// status DTO. The backend enforces single-flight: rapid double-clicks
+// return status="in_progress" without starting duplicate provider fetches.
+export async function triggerUsageSync(): Promise<SyncStatus> {
+  const res = await fetch(`${BASE}/usage-sync`, { method: 'POST' })
+  if (!res.ok) throw new Error(`API error: ${res.status}`)
+  return res.json()
+}

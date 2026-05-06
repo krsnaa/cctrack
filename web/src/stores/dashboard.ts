@@ -23,6 +23,15 @@ export const useDashboardStore = defineStore('dashboard', () => {
     loaded.value = true
   }
 
+  // Summary-only refresh used by surfaces (e.g. the window-bar re-sync
+  // button) that just need the bucket.state honest-state classification
+  // to redraw after a backend status change. Narrower than load() so an
+  // unrelated endpoint failure can't fail the refresh, and so we don't
+  // refetch recent/top sessions on every manual sync.
+  async function refreshSummary() {
+    summary.value = await fetchSummary()
+  }
+
   function applyEvent(event: WsEvent) {
     switch (event.type) {
       case 'summary.updated':
@@ -63,5 +72,5 @@ export const useDashboardStore = defineStore('dashboard', () => {
     }
   }
 
-  return { summary, recentSessions, topSessions, loaded, load, applyEvent }
+  return { summary, recentSessions, topSessions, loaded, load, refreshSummary, applyEvent }
 })

@@ -129,7 +129,7 @@ var serveCmd = &cobra.Command{
 		}
 
 		mux := http.NewServeMux()
-		apiHandler := api.New(s, h, cfg, summaryProvider.Build)
+		apiHandler := api.New(s, h, cfg, summaryProvider.Build, sched.SyncOnce)
 		apiHandler.RegisterRoutes(mux)
 		mux.Handle("/", api.SPAHandler(webFS))
 
