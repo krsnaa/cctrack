@@ -54,12 +54,19 @@ var (
 )
 
 // Snapshot is the allowlisted subset of /api/oauth/usage that cctrack consumes.
-// Reset/end/remaining-time fields are deliberately absent from this v1 struct;
-// schema discovery (T2.1.3) determines whether they exist on the wire and a
-// follow-on slice (S2.2) extends Snapshot if so.
+// Schema discovery (T2.1.3) confirmed both `utilization` numbers and
+// `resets_at` strings are exposed; S2.2 extended this struct with the two
+// reset times so the auto-sync scheduler can write SaveWindowAnchor rows
+// with correct TimeLeftMinutes derivation.
+//
+// resets_at strings are parsed as RFC3339 / RFC3339Nano per F2 S2.2 EM
+// ruling (chat msg 20565 binding constraint #3). Other formats fail
+// closed with ErrSchemaDrift.
 type Snapshot struct {
 	FiveHourUtilizationPercent int       // five_hour.utilization
 	SevenDayUtilizationPercent int       // seven_day.utilization
+	FiveHourResetsAt           time.Time // five_hour.resets_at (parsed)
+	SevenDayResetsAt           time.Time // seven_day.resets_at (parsed)
 	Observed                   time.Time // wall clock at fetch completion
 }
 
@@ -134,13 +141,16 @@ func (c *Client) Fetch(ctx context.Context, creds credentials.Credentials) (Snap
 	}
 
 	// Decode only the allowlisted fields. Unknown extra fields are ignored.
-	// Pointer types let us distinguish "field absent" from "field present and zero".
+	// Pointer types distinguish "field absent" from "field present and zero" /
+	// "field present and empty string."
 	var raw struct {
 		FiveHour struct {
 			Utilization *float64 `json:"utilization"`
+			ResetsAt    *string  `json:"resets_at"`
 		} `json:"five_hour"`
 		SevenDay struct {
 			Utilization *float64 `json:"utilization"`
+			ResetsAt    *string  `json:"resets_at"`
 		} `json:"seven_day"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
@@ -149,10 +159,41 @@ func (c *Client) Fetch(ctx context.Context, creds credentials.Credentials) (Snap
 	if raw.FiveHour.Utilization == nil || raw.SevenDay.Utilization == nil {
 		return Snapshot{}, fmt.Errorf("%w: missing utilization fields", ErrSchemaDrift)
 	}
+	if raw.FiveHour.ResetsAt == nil || raw.SevenDay.ResetsAt == nil {
+		return Snapshot{}, fmt.Errorf("%w: missing resets_at fields", ErrSchemaDrift)
+	}
+
+	fiveHourResetsAt, err := parseResetsAt(*raw.FiveHour.ResetsAt)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("%w: five_hour.resets_at parse", ErrSchemaDrift)
+	}
+	sevenDayResetsAt, err := parseResetsAt(*raw.SevenDay.ResetsAt)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("%w: seven_day.resets_at parse", ErrSchemaDrift)
+	}
 
 	return Snapshot{
 		FiveHourUtilizationPercent: int(*raw.FiveHour.Utilization),
 		SevenDayUtilizationPercent: int(*raw.SevenDay.Utilization),
+		FiveHourResetsAt:           fiveHourResetsAt,
+		SevenDayResetsAt:           sevenDayResetsAt,
 		Observed:                   c.now(),
 	}, nil
+}
+
+// parseResetsAt accepts only RFC3339 / RFC3339Nano timestamps. Any other
+// format (including Go's other time layouts, Unix epoch, or natural-language
+// dates) is rejected. Per F2 S2.2 EM ruling msg 20565 binding constraint #3,
+// the parser MUST fail closed on unrecognized formats; widening to print
+// observed value formats is forbidden.
+func parseResetsAt(s string) (time.Time, error) {
+	// time.RFC3339Nano is a strict superset of time.RFC3339 (the nanosecond
+	// fraction is optional). One Parse call suffices.
+	t, err := time.Parse(time.RFC3339Nano, s)
+	if err != nil {
+		// Note: error message intentionally does NOT include the input string,
+		// since "raw response body in error" leaks beyond what callers can audit.
+		return time.Time{}, errors.New("not RFC3339")
+	}
+	return t.UTC(), nil
 }
