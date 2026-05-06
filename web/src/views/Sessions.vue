@@ -13,6 +13,12 @@
       <button class="filter-clear" @click="clearFilter" aria-label="Clear filter">×</button>
     </div>
 
+    <div v-if="store.error" class="error-banner" role="alert">
+      <span class="error-label">{{ errorLabel }}</span>
+      <span class="error-detail">{{ store.error }}</span>
+      <button class="error-retry" @click="retry">Retry</button>
+    </div>
+
     <div class="sessions-table-wrap">
       <table>
         <thead>
@@ -108,6 +114,18 @@ function clearFilter() {
   router.replace({ query: { ...route.query, date: undefined } })
 }
 
+function retry() {
+  store.loadGroups()
+}
+
+const errorLabel = computed(() => {
+  switch (store.errorKind) {
+    case 'invalid_date': return 'Invalid date'
+    case 'network': return 'Network unreachable'
+    default: return 'Failed to load'
+  }
+})
+
 function pluralizeProjects(n: number) {
   return n === 1 ? 'project' : 'projects'
 }
@@ -176,6 +194,47 @@ const dateFilterLabel = computed(() => {
   transition: color 120ms;
 }
 .filter-clear:hover { color: var(--text-primary); }
+
+.error-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  margin-bottom: var(--space-4);
+  background: rgba(239, 68, 68, 0.06);
+  border: 1px solid rgba(239, 68, 68, 0.25);
+  font-size: 12px;
+  animation: fadeSlideUp 0.3s ease both;
+}
+.error-label {
+  color: rgba(239, 68, 68, 0.95);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 10.5px;
+  font-weight: 500;
+}
+.error-detail {
+  color: var(--text-tertiary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11.5px;
+}
+.error-retry {
+  margin-left: auto;
+  background: transparent;
+  border: 1px solid var(--border-default);
+  color: var(--text-secondary);
+  font-size: 11px;
+  padding: 4px 10px;
+  cursor: pointer;
+  font-family: 'JetBrains Mono', monospace;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  transition: border-color 120ms, color 120ms;
+}
+.error-retry:hover {
+  border-color: var(--amber-500);
+  color: var(--text-primary);
+}
 
 .sessions-table-wrap {
   background: var(--bg-surface);

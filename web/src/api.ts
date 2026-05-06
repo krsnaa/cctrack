@@ -1,4 +1,4 @@
-import type { Summary, SessionsResponse, Session, DailySpend, Settings, RatesResponse, ProjectSummary, ProjectMonthly, ProjectGroupsResponse, ModelSummary, HeatmapCell, RequestRecord, WindowAnchor, CostBreakdown } from './types'
+import type { Summary, SessionsResponse, Session, DailySpend, Settings, RatesResponse, ProjectSummary, ProjectMonthly, ProjectGroupsResponse, ModelSummary, HeatmapCell, RequestRecord, WindowAnchor, CostBreakdown, DayDrilldown } from './types'
 
 const BASE = '/api/v1'
 
@@ -34,6 +34,15 @@ export async function fetchSessionsGrouped(
 ): Promise<ProjectGroupsResponse> {
   const datePart = date ? `&date=${encodeURIComponent(date)}` : ''
   return get<ProjectGroupsResponse>(`/sessions/grouped?sort=${sort}&dir=${dir}${datePart}`)
+}
+
+// Request-day drilldown for a local YYYY-MM-DD. The Sessions tab uses this
+// (instead of fetchSessionsGrouped) when a date filter is active so the
+// numbers shown reflect spend incurred ON that day, not session-lifetime
+// rollups whose last_activity happens to fall on it. Backend rejects
+// missing/malformed/calendar-invalid dates with 400.
+export async function fetchDayDrilldown(date: string): Promise<DayDrilldown> {
+  return get<DayDrilldown>(`/day-drilldown?date=${encodeURIComponent(date)}`)
 }
 
 export async function fetchSession(id: string): Promise<Session> {
