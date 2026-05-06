@@ -51,7 +51,12 @@
         <span v-if="w.capLabel" class="sep">·</span>
         <span v-if="w.capLabel" class="cap-label">{{ w.capLabel }}</span>
         <span class="sep">·</span>
-        <RouterLink to="/settings" class="resync-link">re-sync</RouterLink>
+        <button
+          type="button"
+          class="resync-link"
+          :disabled="syncing"
+          @click="onResyncClick"
+        >{{ syncing ? 'syncing…' : 're-sync' }}</button>
       </div>
     </div>
   </div>
@@ -59,8 +64,8 @@
 
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue'
-import { RouterLink } from 'vue-router'
 import type { WindowBucket } from '../../types'
+import { triggerUsageSync } from '../../api'
 
 const props = defineProps<{
   fiveHour: WindowBucket | null
@@ -84,6 +89,28 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('click', closePopover)
 })
+
+// Re-sync button state. The backend single-flights so duplicate clicks
+// are safely no-ops; we still disable the button while a request is
+// in flight for UX clarity. Failure surfaces through the per-bar
+// honest-state badge (no parallel toast/error UI).
+const syncing = ref(false)
+async function onResyncClick(e: MouseEvent) {
+  e.stopPropagation()
+  if (syncing.value) return
+  syncing.value = true
+  try {
+    await triggerUsageSync()
+    // The backend OnAnchorsUpdated callback broadcasts a fresh summary
+    // through the websocket hub when any anchor was written, so the
+    // dashboard refreshes automatically on success.
+  } catch {
+    // Network/HTTP failure: state will resolve via the honest-state badge
+    // on the next summary update; nothing to surface here.
+  } finally {
+    syncing.value = false
+  }
+}
 
 function pctElapsed(start: string, end: string): number {
   if (!start || !end) return 0
@@ -398,9 +425,18 @@ const bars = computed(() => {
   text-decoration-color: var(--border-default);
   text-underline-offset: 2px;
   transition: color 120ms;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  cursor: pointer;
 }
-.resync-link:hover {
+.resync-link:hover:not(:disabled) {
   color: var(--amber-400);
+}
+.resync-link:disabled {
+  cursor: progress;
+  opacity: 0.7;
 }
 
 /* F2 S2.3 honest-state badges. The badge sits in the bar head between the
