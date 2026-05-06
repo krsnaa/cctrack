@@ -97,13 +97,17 @@ func (p *fakeProvider) Fetch(ctx context.Context, _ credentials.Credentials) (us
 func (p *fakeProvider) callCount() int { return int(atomic.LoadInt32(&p.calls)) }
 
 // fakeStore captures SaveWindowAnchor + ObservedCostForWindow calls.
+//
+// costErrFor / saveErrFor allow per-window-type error injection so tests
+// can pin the row-level "at most one successful row before an error" bar
+// from EM chat msg 20565 (constraint #8).
 type fakeStore struct {
 	mu          sync.Mutex
 	saved       []store.WindowAnchor
 	costCalls   []costCall
 	costReturns map[string]float64 // windowType -> cost; default 0
-	costErr     error
-	saveErr     error
+	costErrFor  map[string]error   // windowType -> err for ObservedCostForWindow (nil = no error)
+	saveErrFor  map[string]error   // windowType -> err for SaveWindowAnchor (nil = no error)
 }
 
 type costCall struct {
@@ -113,14 +117,18 @@ type costCall struct {
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{costReturns: map[string]float64{}}
+	return &fakeStore{
+		costReturns: map[string]float64{},
+		costErrFor:  map[string]error{},
+		saveErrFor:  map[string]error{},
+	}
 }
 
 func (s *fakeStore) SaveWindowAnchor(a store.WindowAnchor) (int64, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.saveErr != nil {
-		return 0, s.saveErr
+	if err := s.saveErrFor[a.WindowType]; err != nil {
+		return 0, err
 	}
 	s.saved = append(s.saved, a)
 	return int64(len(s.saved)), nil
@@ -130,8 +138,8 @@ func (s *fakeStore) ObservedCostForWindow(windowType string, observedAt, resetsA
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.costCalls = append(s.costCalls, costCall{windowType, observedAt, resetsAt})
-	if s.costErr != nil {
-		return 0, s.costErr
+	if err := s.costErrFor[windowType]; err != nil {
+		return 0, err
 	}
 	return s.costReturns[windowType], nil
 }
@@ -506,6 +514,85 @@ func TestRun_ContextCancellationExitsCleanly(t *testing.T) {
 	case <-done:
 	case <-time.After(time.Second):
 		t.Fatal("scheduler did not exit on context cancel")
+	}
+}
+
+// TestRun_BothWindowsStaleStops verifies that a snapshot with both reset
+// times at-or-before observed_at causes the loop to stop (per codex-2 chat
+// msg 20587 finding #1: no periodic-poll fallback). Manual sync remains
+// available; auto-refresh waits for process restart.
+func TestRun_BothWindowsStaleStops(t *testing.T) {
+	observed := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	snap := usageprovider.Snapshot{
+		FiveHourUtilizationPercent: 1,
+		SevenDayUtilizationPercent: 2,
+		FiveHourResetsAt:           observed.Add(-1 * time.Minute), // STALE
+		SevenDayResetsAt:           observed.Add(-2 * time.Minute), // STALE
+		Observed:                   observed,
+	}
+	provider := newFakeProvider(fakeResp{snap: snap})
+	storeF := newFakeStore()
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, nopLog).WithClock(newFakeClock(observed))
+
+	runUntilDone(t, sched)
+
+	if got := provider.callCount(); got != 1 {
+		t.Errorf("Fetch called %d times after both-stale; want exactly 1 (stop)", got)
+	}
+	if anchors := storeF.savedAnchors(); len(anchors) != 0 {
+		t.Errorf("got %d anchors written when both windows stale; want 0", len(anchors))
+	}
+}
+
+// TestRun_CostErrorOnOneWindowSkipsThatAnchor verifies the row-level write
+// behavior (per codex-2 chat msg 20587 finding #3): when ObservedCostForWindow
+// fails for one window but succeeds for the other, exactly one anchor is
+// written. The scheduler does not abort the loop on a per-window cost error.
+func TestRun_CostErrorOnOneWindowSkipsThatAnchor(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+	provider := newFakeProvider(fakeResp{snap: snap})
+	storeF := newFakeStore()
+	storeF.costErrFor["5h"] = errors.New("simulated cost helper failure for 5h")
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, nopLog).WithClock(newFakeClock(now))
+
+	runUntilCalls(t, sched, provider, 1)
+
+	saved := storeF.savedAnchors()
+	if len(saved) != 1 {
+		t.Fatalf("saved %d anchors, want exactly 1 (5h cost failed; 7d should still write)", len(saved))
+	}
+	if saved[0].WindowType != "7d" {
+		t.Errorf("saved anchor for %q, want 7d only", saved[0].WindowType)
+	}
+}
+
+// TestRun_SaveErrorOnOneWindowDoesNotBlockOther mirrors the cost-error case
+// for the SaveWindowAnchor path: one window's save fails, the other succeeds.
+// The scheduler logs the failure and continues; no anchor is observable for
+// the failed window. Per EM chat msg 20565 constraint #8: "at most one
+// successful row before an error" is acceptable, must be tested.
+func TestRun_SaveErrorOnOneWindowDoesNotBlockOther(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+	provider := newFakeProvider(fakeResp{snap: snap})
+	storeF := newFakeStore()
+	storeF.saveErrFor["5h"] = errors.New("simulated save failure for 5h")
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, nopLog).WithClock(newFakeClock(now))
+
+	runUntilCalls(t, sched, provider, 1)
+
+	saved := storeF.savedAnchors()
+	if len(saved) != 1 {
+		t.Fatalf("saved %d anchors, want exactly 1 (5h save failed; 7d should still write)", len(saved))
+	}
+	if saved[0].WindowType != "7d" {
+		t.Errorf("saved anchor for %q, want 7d only", saved[0].WindowType)
+	}
+	// Cost helper was called for BOTH windows (the 5h save failed AFTER cost).
+	calls := storeF.recordedCostCalls()
+	if len(calls) != 2 {
+		t.Errorf("ObservedCostForWindow called %d times; want 2 (both windows attempted)", len(calls))
 	}
 }
 

@@ -80,10 +80,6 @@ const (
 	// so we don't race the upstream's own boundary roll.
 	graceDelay = 30 * time.Second
 
-	// fallbackDelay is used when both windows return stale-or-invalid data
-	// and we have no real reset time to schedule against.
-	fallbackDelay = 30 * time.Second
-
 	// backoffInitial / backoffMax / backoffFactor define the exponential
 	// schedule for transient provider failures.
 	backoffInitial = 30 * time.Second
@@ -151,7 +147,14 @@ func (s *Scheduler) Run(ctx context.Context) {
 		// Successful tick — reset backoff.
 		backoff = backoffInitial
 		if delay <= 0 {
-			delay = fallbackDelay
+			// Defensive: tick must return a positive delay on success
+			// because earliestFutureReset() is a strict-future check and
+			// the both-stale case takes the errStop path below. A zero
+			// here means a programming error introduced a periodic-poll
+			// path that EM constraint #7 forbids; refuse rather than
+			// fabricate a fallback delay.
+			s.log("internal: tick returned non-positive delay on success; stopping")
+			return
 		}
 		if sleepErr := s.clock.Sleep(ctx, delay); sleepErr != nil {
 			return
@@ -196,11 +199,15 @@ func (s *Scheduler) tick(ctx context.Context) (time.Duration, error) {
 	s.writeAnchorIfFresh(snap, "5h", snap.FiveHourResetsAt)
 	s.writeAnchorIfFresh(snap, "7d", snap.SevenDayResetsAt)
 
-	// Schedule the next fetch at the EARLIEST observed reset + grace. If both
-	// resets are stale-or-zero, return 0 to let the caller pick a fallback.
+	// Schedule the next fetch at the EARLIEST observed reset + grace. If
+	// both resets are stale-or-zero, we have no valid trigger time. Per EM
+	// constraint #7 (no periodic polling) and the spirit of constraint #6
+	// (no fabricating boundaries), this is a stop class — fall back to
+	// manual sync until the next process restart.
 	next := earliestFutureReset(snap)
 	if next.IsZero() {
-		return 0, nil
+		s.log("both windows have non-future resets; stopping auto-refresh")
+		return 0, errStop
 	}
 	delay := next.Add(graceDelay).Sub(s.clock.Now())
 	if delay < 0 {
@@ -215,7 +222,10 @@ func (s *Scheduler) tick(ctx context.Context) (time.Duration, error) {
 // window; we skip the write rather than fabricating a zero-minute anchor.
 func (s *Scheduler) writeAnchorIfFresh(snap usageprovider.Snapshot, windowType string, resetsAt time.Time) {
 	if !resetsAt.After(snap.Observed) {
-		s.log("%s: stale snapshot (resets_at %v <= observed %v); skipping write", windowType, resetsAt, snap.Observed)
+		// Schema hard-rule (S2.1/S2.2): no raw response values in logs.
+		// Parsed `resets_at` and `Observed` are derived response values;
+		// log only the window class, not the timestamps themselves.
+		s.log("%s: stale snapshot; skipping write", windowType)
 		return
 	}
 
