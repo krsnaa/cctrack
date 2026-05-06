@@ -133,20 +133,17 @@ func (a *API) handlePostWindowAnchor(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Compute observed_cost over the window the *user is describing*, not
-	// cctrack's cascading detection. The cascading detector picks its own
-	// window boundaries from the request stream, which can diverge from
-	// Anthropic's actual window — so dividing the wrong cost by the user's
-	// pct yields a wildly wrong cap (off by a factor of 5–50× in practice).
-	// Anchored bounds: [now-(duration-time_left), now].
-	duration := 5 * time.Hour
-	if body.WindowType == "7d" {
-		duration = 7 * 24 * time.Hour
-	}
+	// Compute observed_cost over the window the *user is describing*. The
+	// shared helper anchors the window to the user-supplied reset moment
+	// (anchoredEnd = now + time_left_minutes), not to cctrack's cascading
+	// detector. The cascading detector picks its own window boundaries
+	// from the request stream, which can diverge from Anthropic's actual
+	// window — dividing the wrong cost by the user's pct yields a wildly
+	// wrong cap (off by 5-50x in practice). The auto-sync scheduler uses
+	// the same helper so manual and auto flows cannot drift.
 	now := time.Now()
 	anchoredEnd := now.Add(time.Duration(body.TimeLeftMinutes) * time.Minute)
-	windowStart := anchoredEnd.Add(-duration)
-	observed, err := a.store.CostInRange(windowStart, now)
+	observed, err := a.store.ObservedCostForWindow(body.WindowType, now, anchoredEnd)
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return

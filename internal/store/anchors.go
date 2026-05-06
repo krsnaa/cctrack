@@ -2,8 +2,40 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
 	"time"
 )
+
+// WindowDuration returns the rolling window length for a canonical window
+// type. Returns 0 for unknown types; callers should treat that as a
+// programming error.
+func WindowDuration(windowType string) time.Duration {
+	switch windowType {
+	case "5h":
+		return 5 * time.Hour
+	case "7d":
+		return 7 * 24 * time.Hour
+	}
+	return 0
+}
+
+// ObservedCostForWindow sums request cost over the rolling window an
+// upstream usage anchor describes: [resetsAt - WindowDuration(windowType),
+// observedAt). Half-open at the right end so adjacent windows don't
+// double-count their boundary timestamp.
+//
+// This helper is the single source of truth for anchor-cost math. Both
+// the manual-sync POST /api/v1/window-anchors handler and the auto-sync
+// scheduler call it; drift between the two flows is impossible by
+// construction. Per F2 S2.2 EM ruling chat msg 20565: "factor the
+// manual-sync observed-cost math into a shared helper first."
+func (s *Store) ObservedCostForWindow(windowType string, observedAt, resetsAt time.Time) (float64, error) {
+	d := WindowDuration(windowType)
+	if d == 0 {
+		return 0, fmt.Errorf("ObservedCostForWindow: unknown window type %q", windowType)
+	}
+	return s.CostInRange(resetsAt.Add(-d), observedAt)
+}
 
 // WindowAnchor captures one user-driven sync against Anthropic's UI. Going
 // forward, the latest anchor of each window_type overrides the cascading
