@@ -3,6 +3,8 @@ package usagescheduler
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -819,16 +821,35 @@ func TestRun_OnAnchorsUpdatedFiresWhenAtLeastOneWriteSucceeds(t *testing.T) {
 // "callback failure must not roll back persisted anchors; log a redacted
 // generic error and let the scheduler continue." A callback that returns
 // an error must not crash the loop or unwind the anchor writes.
+//
+// Also pins the redaction discipline (per codex-2 chat msg 20597): the
+// scheduler's log line for callback failure must NOT contain the
+// underlying error text. cmd/serve's callback may wrap concrete
+// database / serialization internals; those must not leak into
+// scheduler-level logs.
 func TestRun_OnAnchorsUpdatedErrorIsLoggedAndSwallowed(t *testing.T) {
 	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
 	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
 	provider := newFakeProvider(fakeResp{snap: snap}, fakeResp{snap: snap})
 	storeF := newFakeStore()
 
+	const sentinel = "REDACTED-PROBE-DO-NOT-LEAK-12345"
 	cb := func(ctx context.Context) error {
-		return errors.New("simulated callback failure")
+		return errors.New(sentinel + " inner database details")
 	}
-	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, nopLog).
+
+	// Capture logger so we can assert the redaction.
+	var (
+		logMu   sync.Mutex
+		logBuf  []string
+	)
+	captureLog := func(format string, args ...any) {
+		logMu.Lock()
+		defer logMu.Unlock()
+		logBuf = append(logBuf, fmt.Sprintf(format, args...))
+	}
+
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, captureLog).
 		WithClock(newFakeClock(now)).
 		WithOnAnchorsUpdated(cb)
 
@@ -837,6 +858,28 @@ func TestRun_OnAnchorsUpdatedErrorIsLoggedAndSwallowed(t *testing.T) {
 	saved := storeF.savedAnchors()
 	if len(saved) != 4 { // 2 ticks * 2 windows
 		t.Errorf("saved %d anchors despite callback errors; want 4 (2 ticks * 2 windows; errors must not roll back)", len(saved))
+	}
+
+	// The redaction discipline: the callback error sentinel MUST NOT appear
+	// in any captured log line. The scheduler's line is a fixed redacted
+	// message; the underlying error text is dropped on the floor.
+	logMu.Lock()
+	defer logMu.Unlock()
+	for _, line := range logBuf {
+		if strings.Contains(line, sentinel) {
+			t.Errorf("scheduler log line leaked callback error sentinel: %q (full log: %v)", line, logBuf)
+		}
+	}
+	// Sanity check: the callback DID fail and SOMETHING was logged about it.
+	foundFailureLog := false
+	for _, line := range logBuf {
+		if strings.Contains(line, "callback failed") {
+			foundFailureLog = true
+			break
+		}
+	}
+	if !foundFailureLog {
+		t.Errorf("expected a 'callback failed' log entry; got %v", logBuf)
 	}
 }
 

@@ -298,15 +298,23 @@ func (s *Scheduler) writeAnchorIfFresh(snap usageprovider.Snapshot, windowType s
 }
 
 // invokeOnAnchorsUpdated calls the optional update callback. Errors are
-// logged (without echoing the underlying value beyond a generic message)
-// and swallowed so callback misbehavior cannot roll back the anchors that
-// were just persisted. Per EM ruling chat msg 20591/20593.
+// logged with a FIXED REDACTED MESSAGE (no underlying error value) and
+// swallowed so callback misbehavior cannot roll back the anchors that
+// were just persisted. Per EM ruling chat msg 20591/20593 + verifier
+// finding chat msg 20597: callback closures (e.g. cmd/serve's
+// summary.updated broadcast) may wrap concrete database / serialization
+// errors that should not appear in scheduler logs.
 func (s *Scheduler) invokeOnAnchorsUpdated(ctx context.Context) {
 	if s.onAnchorsUpdated == nil {
 		return
 	}
 	if err := s.onAnchorsUpdated(ctx); err != nil {
-		s.log("OnAnchorsUpdated callback failed: %v", err)
+		// Intentional: do NOT format `err` into the message. The callback
+		// is owned by cmd/serve and may wrap concrete internals
+		// (database paths, JSON marshaling diagnostics) that are not
+		// safe for scheduler-level logs.
+		_ = err
+		s.log("OnAnchorsUpdated callback failed (details redacted)")
 	}
 }
 
