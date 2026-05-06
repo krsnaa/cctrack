@@ -1,8 +1,29 @@
 <template>
   <div class="window-bars">
-    <div class="window-bar" v-for="(w, i) in bars" :key="i">
+    <div :class="['window-bar', w.barClass]" v-for="(w, i) in bars" :key="i">
       <div class="window-bar-head">
         <span class="window-bar-title">{{ w.title }}</span>
+        <span v-if="w.stateBadge" class="state-badge-wrap">
+          <button
+            :class="['state-badge', w.stateBadgeClass]"
+            :title="w.stateTooltip"
+            :aria-expanded="openIdx === i"
+            type="button"
+            @click.stop="togglePopover(i)"
+            @keydown.escape="openIdx = null"
+          >
+            <span class="state-dot" aria-hidden="true"></span>
+            {{ w.stateBadge }}
+          </button>
+          <div
+            v-if="openIdx === i"
+            class="state-popover"
+            role="dialog"
+            @click.stop
+          >
+            {{ w.stateTooltip }}
+          </div>
+        </span>
         <span class="window-bar-meta">
           <span v-if="w.hasDenom" class="usage-pct">{{ w.usagePct.toFixed(1) }}%</span>
           <template v-if="w.paceText">
@@ -35,7 +56,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import type { WindowBucket } from '../../types'
 
@@ -43,6 +64,24 @@ const props = defineProps<{
   fiveHour: WindowBucket | null
   sevenDay: WindowBucket | null
 }>()
+
+// Tracks which bar's state-popover (if any) is currently open. Only one
+// popover at a time. Per F2 S2.3 PO direction (chat msg 20616): hover OR
+// click on the badge surfaces details. Hover is the native `title` attr;
+// click toggles a small popover via openIdx + document outside-click.
+const openIdx = ref<number | null>(null)
+function togglePopover(i: number) {
+  openIdx.value = openIdx.value === i ? null : i
+}
+function closePopover() {
+  openIdx.value = null
+}
+onMounted(() => {
+  document.addEventListener('click', closePopover)
+})
+onUnmounted(() => {
+  document.removeEventListener('click', closePopover)
+})
 
 function pctElapsed(start: string, end: string): number {
   if (!start || !end) return 0
@@ -89,6 +128,72 @@ interface Bar {
   tooltip: string
   syncedLabel: string // "4h ago", or "" if never synced
   syncStale: boolean  // sync older than the window's own duration
+  // F2 S2.3 honest-state surface. Empty stateBadge means "render as
+  // healthy default" (auto_fresh OR state field absent on older backends).
+  stateBadge: string       // short label shown in the badge ('' = no badge)
+  stateBadgeClass: string  // CSS class for badge color (e.g. 'badge-warn', 'badge-error')
+  stateTooltip: string     // hover/click popover text
+  barClass: string         // CSS class applied to .window-bar (e.g. 'state-faded')
+}
+
+interface StateMeta {
+  badge: string
+  badgeClass: string
+  tooltip: string
+  barClass: string
+}
+
+// stateMetaFor maps the backend honest-state enum onto the badge + visual
+// treatment. The auto_fresh case (and the missing-state default) returns
+// empty strings so the bar renders normally — most-of-the-time state.
+//
+// Per F2 S2.3 PO direction (chat msg 20616): inline badge + subtle dot,
+// hover/click for details, no default banners, subtle bar visual treatment.
+// Copy is v0.1; PO will redline post-implementation per PM ruling msg 20645.
+function stateMetaFor(state: string | undefined): StateMeta {
+  switch (state) {
+    case 'auto_fresh':
+    case undefined:
+      // Healthy or backend hasn't populated state — render plain.
+      return { badge: '', badgeClass: '', tooltip: '', barClass: '' }
+    case 'auto_stale':
+      return {
+        badge: 'Refreshing',
+        badgeClass: 'badge-stale',
+        tooltip: 'Window rolled over · auto-sync will pick up the new one shortly',
+        barClass: 'state-stale',
+      }
+    case 'token_expired':
+      return {
+        badge: 'Sign in',
+        badgeClass: 'badge-error',
+        tooltip: 'OAuth token expired · open Claude Code to refresh, then restart cctrack to resume auto-sync. Manual sync still works.',
+        barClass: 'state-faded',
+      }
+    case 'provider_unavailable':
+      return {
+        badge: 'Offline',
+        badgeClass: 'badge-warn',
+        tooltip: 'Anthropic endpoint unreachable · auto-sync is backing off and will retry. Manual sync still works.',
+        barClass: 'state-faded',
+      }
+    case 'manual_anchor':
+      return {
+        badge: 'Manual',
+        badgeClass: 'badge-neutral',
+        tooltip: "Manually synced · auto-sync isn't running.",
+        barClass: '',
+      }
+    case 'fallback_cascade':
+    case 'unknown':
+    default:
+      return {
+        badge: 'Estimate',
+        badgeClass: 'badge-neutral',
+        tooltip: 'No anchor · showing inferred window from request stream. Sync from claude.ai/usage for exact reset times.',
+        barClass: 'state-cascade',
+      }
+  }
 }
 
 function fmtResetMoment(end: string, longHorizon: boolean): string {
@@ -145,11 +250,14 @@ function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): 
       ? `${baseTooltip}\n$${w.cost.toFixed(2)} this window · $${w.prev_cost.toFixed(2)} previous`
       : baseTooltip
 
+  const meta = stateMetaFor(w.state)
   if (denom <= 0) {
     return {
       title, timePct, usagePct: 0, usageWidth: 0, hasDenom: false,
       paceText: 'sync to enable', paceClass: '',
       remaining, resetsAt, tooltip, syncedLabel, syncStale,
+      stateBadge: meta.badge, stateBadgeClass: meta.badgeClass,
+      stateTooltip: meta.tooltip, barClass: meta.barClass,
     }
   }
   const usagePct = (w.cost / denom) * 100
@@ -163,6 +271,8 @@ function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): 
   return {
     title, timePct, usagePct, usageWidth, hasDenom: true, paceText, paceClass,
     remaining, resetsAt, tooltip, syncedLabel, syncStale,
+    stateBadge: meta.badge, stateBadgeClass: meta.badgeClass,
+    stateTooltip: meta.tooltip, barClass: meta.barClass,
   }
 }
 
@@ -275,5 +385,102 @@ const bars = computed(() => {
 }
 .resync-link:hover {
   color: var(--amber-400);
+}
+
+/* F2 S2.3 honest-state badges. The badge sits in the bar head between the
+   title and the metadata (usage %, pace, remaining). Only renders when
+   stateBadge is non-empty — auto_fresh state and missing-state both render
+   the bar without a badge. The wrap is the positioning context for the
+   click-toggle popover. */
+.state-badge-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.state-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 999px;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  user-select: none;
+  background: transparent;
+  border: 1px solid transparent;
+  color: inherit;
+  font: inherit;
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.04em;
+}
+.state-badge:focus-visible {
+  outline: 2px solid var(--amber-400);
+  outline-offset: 1px;
+}
+
+/* Click-toggle popover. Anchored to the badge wrap; one open at a time
+   (closes on outside click via document listener). Snap appearance — no
+   transition — per kiku's UX bar (msg 20616 E). */
+.state-popover {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 10;
+  background: var(--bg-elevated, var(--bg-base));
+  border: 1px solid var(--border-default);
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--text-secondary);
+  max-width: 280px;
+  width: max-content;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+}
+.state-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  display: inline-block;
+  background: currentColor;
+}
+.state-badge.badge-stale {
+  color: var(--text-tertiary);
+  background: var(--bg-subtle);
+  border: 1px dashed var(--border-default);
+}
+.state-badge.badge-error {
+  color: var(--cost-high);
+  background: rgba(239, 68, 68, 0.1); /* red tint */
+}
+.state-badge.badge-warn {
+  color: var(--amber-400);
+  background: rgba(251, 191, 36, 0.1); /* amber tint */
+}
+.state-badge.badge-neutral {
+  color: var(--text-tertiary);
+  background: var(--bg-subtle);
+}
+
+/* Subtle bar visual treatments per state. The defaults (auto_fresh,
+   undefined, manual_anchor) leave .window-bar untouched. */
+.window-bar.state-faded {
+  opacity: 0.85;
+}
+.window-bar.state-faded .window-bar-fill {
+  opacity: 0.7;
+}
+.window-bar.state-stale .window-bar-track {
+  border-style: dashed;
+}
+.window-bar.state-cascade {
+  opacity: 0.75;
+}
+.window-bar.state-cascade .window-bar-fill {
+  background: var(--text-tertiary); /* no claim of "real" usage data */
 }
 </style>
