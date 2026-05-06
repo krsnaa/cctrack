@@ -463,6 +463,144 @@ func TestRun_BackoffOnTransientError(t *testing.T) {
 	}
 }
 
+// TestRun_BackoffOnRateLimited mirrors TestRun_BackoffOnTransientError but
+// with ErrRateLimited (the other transient class). 429 must drive the same
+// exponential schedule, not a different code path.
+func TestRun_BackoffOnRateLimited(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	clock := newFakeClock(now)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+	provider := newFakeProvider(
+		fakeResp{err: usageprovider.ErrRateLimited},
+		fakeResp{snap: snap},
+	)
+	storeF := newFakeStore()
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, nopLog).WithClock(clock)
+
+	runUntilCalls(t, sched, provider, 2)
+	sleeps := clock.recordedSleeps()
+	if len(sleeps) < 1 {
+		t.Fatalf("no sleeps recorded; want at least 1 backoff sleep")
+	}
+	if sleeps[0] != backoffInitial {
+		t.Errorf("first sleep after ErrRateLimited = %v, want backoffInitial=%v", sleeps[0], backoffInitial)
+	}
+}
+
+// TestRun_BackoffSequenceCapsAtMax verifies the exponential backoff
+// schedule and its cap. With backoffInitial=30s, factor=2, max=5min, the
+// schedule is: 30s, 60s, 120s, 240s, 300s (cap), 300s, ... This pins the
+// cap behavior at scheduler.go's backoff doubling logic.
+func TestRun_BackoffSequenceCapsAtMax(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	clock := newFakeClock(now)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+	// Six consecutive transient errors then a success — covers initial,
+	// three doublings, the cap clamp, and one post-cap sleep.
+	provider := newFakeProvider(
+		fakeResp{err: usageprovider.ErrProviderUnavailable}, // sleep[0]: 30s
+		fakeResp{err: usageprovider.ErrProviderUnavailable}, // sleep[1]: 60s
+		fakeResp{err: usageprovider.ErrProviderUnavailable}, // sleep[2]: 120s
+		fakeResp{err: usageprovider.ErrProviderUnavailable}, // sleep[3]: 240s
+		fakeResp{err: usageprovider.ErrProviderUnavailable}, // sleep[4]: 300s (cap)
+		fakeResp{err: usageprovider.ErrProviderUnavailable}, // sleep[5]: 300s (still cap)
+		fakeResp{snap: snap},                                // success — backoff resets
+	)
+	storeF := newFakeStore()
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, nopLog).WithClock(clock)
+
+	runUntilCalls(t, sched, provider, 7)
+	sleeps := clock.recordedSleeps()
+	if len(sleeps) < 6 {
+		t.Fatalf("recorded %d sleeps; want at least 6 backoff sleeps before success", len(sleeps))
+	}
+	want := []time.Duration{
+		30 * time.Second,
+		60 * time.Second,
+		120 * time.Second,
+		240 * time.Second,
+		300 * time.Second, // cap reached
+		300 * time.Second, // still capped
+	}
+	for i, w := range want {
+		if sleeps[i] != w {
+			t.Errorf("sleeps[%d] = %v, want %v (exponential schedule with cap at backoffMax=%v)", i, sleeps[i], w, backoffMax)
+		}
+	}
+	// Final cap matches the constant.
+	if sleeps[4] != backoffMax {
+		t.Errorf("at-cap sleep = %v, want backoffMax=%v", sleeps[4], backoffMax)
+	}
+}
+
+// TestRun_FetchesAreSequentialNotOverlapping verifies that scheduler
+// fetches do not overlap. The scheduler is single-goroutine by construction
+// (Run loop is sequential), but the test pins the property: fetch N+1
+// strictly starts after fetch N returns, so concurrent provider calls
+// cannot occur in this codepath. Combined with the provider's own
+// process-wide mutex (usageprovider.Client.mu), this gives end-to-end
+// single-flight.
+func TestRun_FetchesAreSequentialNotOverlapping(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	clock := newFakeClock(now)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+
+	// Fake provider that records (start, end) timestamps for each Fetch
+	// call. We block briefly inside Fetch to give any racing call a chance
+	// to overlap — if scheduler ever spawned a second Fetch in parallel, the
+	// recorded intervals would overlap and the assertion would fail.
+	type interval struct{ start, end time.Time }
+	var (
+		intervalsMu sync.Mutex
+		intervals   []interval
+	)
+	provider := &recordingProvider{
+		fakeProvider: newFakeProvider(
+			fakeResp{snap: snap},
+			fakeResp{snap: snap},
+			fakeResp{snap: snap},
+		),
+		onCall: func() (start, end time.Time) {
+			s := time.Now()
+			time.Sleep(5 * time.Millisecond) // simulate non-trivial in-flight time
+			e := time.Now()
+			intervalsMu.Lock()
+			intervals = append(intervals, interval{s, e})
+			intervalsMu.Unlock()
+			return s, e
+		},
+	}
+	storeF := newFakeStore()
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, nopLog).WithClock(clock)
+
+	runUntilCalls(t, sched, provider.fakeProvider, 3)
+
+	intervalsMu.Lock()
+	defer intervalsMu.Unlock()
+	if len(intervals) < 3 {
+		t.Fatalf("recorded %d intervals; want >=3", len(intervals))
+	}
+	// Verify no overlap: interval[i+1].start must be at-or-after interval[i].end.
+	for i := 0; i < len(intervals)-1; i++ {
+		if intervals[i+1].start.Before(intervals[i].end) {
+			t.Errorf("fetch %d started at %v before fetch %d ended at %v (overlap = single-flight broken)",
+				i+1, intervals[i+1].start, i, intervals[i].end)
+		}
+	}
+}
+
+// recordingProvider wraps fakeProvider with a hook that fires on each call.
+// Used only by TestRun_FetchesAreSequentialNotOverlapping.
+type recordingProvider struct {
+	*fakeProvider
+	onCall func() (start, end time.Time)
+}
+
+func (r *recordingProvider) Fetch(ctx context.Context, c credentials.Credentials) (usageprovider.Snapshot, error) {
+	r.onCall()
+	return r.fakeProvider.Fetch(ctx, c)
+}
+
 // TestRun_PostSuccessDelayMatchesEarliestReset verifies binding constraint
 // #7: after a successful fetch, the next sleep duration is approximately
 // (earliest reset + grace) - clock.Now(). With 5h and 7d resets, the 5h
@@ -593,6 +731,112 @@ func TestRun_SaveErrorOnOneWindowDoesNotBlockOther(t *testing.T) {
 	calls := storeF.recordedCostCalls()
 	if len(calls) != 2 {
 		t.Errorf("ObservedCostForWindow called %d times; want 2 (both windows attempted)", len(calls))
+	}
+}
+
+// TestRun_OnAnchorsUpdatedFiresAfterSuccessfulWrite verifies the EM
+// callback contract (chat msg 20591/20593): cmd/serve installs an update
+// callback; scheduler invokes it after at least one anchor write succeeds.
+// This is the live-dashboard-freshness path for auto-sync.
+func TestRun_OnAnchorsUpdatedFiresAfterSuccessfulWrite(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+	provider := newFakeProvider(fakeResp{snap: snap})
+	storeF := newFakeStore()
+
+	var callbackCount int32
+	cb := func(ctx context.Context) error {
+		atomic.AddInt32(&callbackCount, 1)
+		return nil
+	}
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, nopLog).
+		WithClock(newFakeClock(now)).
+		WithOnAnchorsUpdated(cb)
+
+	runUntilCalls(t, sched, provider, 1)
+
+	if got := atomic.LoadInt32(&callbackCount); got != 1 {
+		t.Errorf("callback called %d times after successful tick; want 1", got)
+	}
+}
+
+// TestRun_OnAnchorsUpdatedNotCalledWhenAllWritesFail verifies the gate:
+// if no anchor row is written (cost or save errors on both windows), the
+// callback must NOT fire. Otherwise downstream (e.g. summary.updated
+// broadcast) would tell clients there's new state when there isn't.
+func TestRun_OnAnchorsUpdatedNotCalledWhenAllWritesFail(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+	provider := newFakeProvider(fakeResp{snap: snap})
+	storeF := newFakeStore()
+	storeF.saveErrFor["5h"] = errors.New("simulated 5h save failure")
+	storeF.saveErrFor["7d"] = errors.New("simulated 7d save failure")
+
+	var callbackCount int32
+	cb := func(ctx context.Context) error {
+		atomic.AddInt32(&callbackCount, 1)
+		return nil
+	}
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, nopLog).
+		WithClock(newFakeClock(now)).
+		WithOnAnchorsUpdated(cb)
+
+	runUntilCalls(t, sched, provider, 1)
+
+	if got := atomic.LoadInt32(&callbackCount); got != 0 {
+		t.Errorf("callback called %d times when both saves failed; want 0", got)
+	}
+}
+
+// TestRun_OnAnchorsUpdatedFiresWhenAtLeastOneWriteSucceeds — partial
+// success path: 5h fails, 7d succeeds. The callback fires (because at
+// least one anchor row was persisted). Combined with the previous test,
+// this pins "at least one" semantics, not "all must succeed."
+func TestRun_OnAnchorsUpdatedFiresWhenAtLeastOneWriteSucceeds(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+	provider := newFakeProvider(fakeResp{snap: snap})
+	storeF := newFakeStore()
+	storeF.saveErrFor["5h"] = errors.New("simulated 5h save failure")
+
+	var callbackCount int32
+	cb := func(ctx context.Context) error {
+		atomic.AddInt32(&callbackCount, 1)
+		return nil
+	}
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, nopLog).
+		WithClock(newFakeClock(now)).
+		WithOnAnchorsUpdated(cb)
+
+	runUntilCalls(t, sched, provider, 1)
+
+	if got := atomic.LoadInt32(&callbackCount); got != 1 {
+		t.Errorf("callback called %d times when 7d succeeded; want 1 (at-least-one semantics)", got)
+	}
+}
+
+// TestRun_OnAnchorsUpdatedErrorIsLoggedAndSwallowed verifies the EM bar:
+// "callback failure must not roll back persisted anchors; log a redacted
+// generic error and let the scheduler continue." A callback that returns
+// an error must not crash the loop or unwind the anchor writes.
+func TestRun_OnAnchorsUpdatedErrorIsLoggedAndSwallowed(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+	provider := newFakeProvider(fakeResp{snap: snap}, fakeResp{snap: snap})
+	storeF := newFakeStore()
+
+	cb := func(ctx context.Context) error {
+		return errors.New("simulated callback failure")
+	}
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, storeF, nopLog).
+		WithClock(newFakeClock(now)).
+		WithOnAnchorsUpdated(cb)
+
+	runUntilCalls(t, sched, provider, 2) // verifies loop continues to a second tick
+
+	saved := storeF.savedAnchors()
+	if len(saved) != 4 { // 2 ticks * 2 windows
+		t.Errorf("saved %d anchors despite callback errors; want 4 (2 ticks * 2 windows; errors must not roll back)", len(saved))
 	}
 }
 

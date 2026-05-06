@@ -126,11 +126,31 @@ var serveCmd = &cobra.Command{
 		// available as fallback. The scheduler shares its observed-cost math
 		// with the manual-sync handler via store.ObservedCostForWindow, so the
 		// two flows cannot drift.
+		//
+		// The OnAnchorsUpdated callback (per EM ruling chat msg 20591/20593)
+		// broadcasts a fresh summary through the websocket hub when the
+		// scheduler writes at least one anchor; this drives live dashboard
+		// freshness for auto-sync the same way the watcher drives it for
+		// log-file events. The scheduler itself does not import api/hub;
+		// cmd/serve owns the broadcast wiring.
 		schedProvider := usageprovider.New()
 		schedLogger := func(format string, args ...any) {
 			log.Printf("usagescheduler: "+format, args...)
 		}
-		sched := usagescheduler.New(schedProvider, credentials.Load, s, schedLogger)
+		schedOnUpdate := func(_ context.Context) error {
+			summary, err := s.GetSummary()
+			if err != nil {
+				return fmt.Errorf("get summary: %w", err)
+			}
+			payload, err := json.Marshal(summary)
+			if err != nil {
+				return fmt.Errorf("marshal summary: %w", err)
+			}
+			h.Broadcast("summary.updated", payload)
+			return nil
+		}
+		sched := usagescheduler.New(schedProvider, credentials.Load, s, schedLogger).
+			WithOnAnchorsUpdated(schedOnUpdate)
 		schedDone := make(chan struct{})
 		go func() {
 			sched.Run(ctx)

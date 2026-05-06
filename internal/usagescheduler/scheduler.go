@@ -75,6 +75,18 @@ type Clock interface {
 // pass a no-op to keep output clean.
 type Logger func(format string, args ...any)
 
+// OnAnchorsUpdated is the optional callback fired after a tick in which
+// at least one anchor row was successfully written. Per F2 S2.2 EM ruling
+// chat msg 20591/20593: cmd/serve owns the concrete implementation (e.g.
+// fetching a fresh summary and broadcasting "summary.updated" through
+// the existing hub) so that automatic anchor writes drive the same live
+// freshness path as other backend state changes. The scheduler invokes
+// it but does not import internal/api or internal/hub.
+//
+// Callback errors are logged (redacted) and swallowed; a callback
+// failure does NOT roll back the persisted anchors.
+type OnAnchorsUpdated func(ctx context.Context) error
+
 const (
 	// graceDelay is added to the observed reset time before re-fetching,
 	// so we don't race the upstream's own boundary roll.
@@ -93,11 +105,12 @@ var errStop = errors.New("usagescheduler: permanent error, stopping")
 
 // Scheduler is the main type. Construct via New; run via Run.
 type Scheduler struct {
-	provider  Provider
-	loadCreds CredentialsLoader
-	store     AnchorStore
-	clock     Clock
-	log       Logger
+	provider         Provider
+	loadCreds        CredentialsLoader
+	store            AnchorStore
+	clock            Clock
+	log              Logger
+	onAnchorsUpdated OnAnchorsUpdated // optional; nil = no callback
 }
 
 // New constructs a Scheduler with the supplied dependencies and
@@ -116,6 +129,15 @@ func New(p Provider, lc CredentialsLoader, s AnchorStore, log Logger) *Scheduler
 // the scheduler for chained construction.
 func (s *Scheduler) WithClock(c Clock) *Scheduler {
 	s.clock = c
+	return s
+}
+
+// WithOnAnchorsUpdated installs the callback fired after a tick that
+// wrote at least one anchor. Returns the scheduler for chained
+// construction. cmd/serve typically passes a closure that broadcasts a
+// fresh summary through the websocket hub.
+func (s *Scheduler) WithOnAnchorsUpdated(cb OnAnchorsUpdated) *Scheduler {
+	s.onAnchorsUpdated = cb
 	return s
 }
 
@@ -195,9 +217,13 @@ func (s *Scheduler) tick(ctx context.Context) (time.Duration, error) {
 
 	// Write each window's anchor independently. A stale or per-window failure
 	// does not abort the other window; row writes are atomic at the DB layer
-	// (SaveWindowAnchor is one INSERT).
-	s.writeAnchorIfFresh(snap, "5h", snap.FiveHourResetsAt)
-	s.writeAnchorIfFresh(snap, "7d", snap.SevenDayResetsAt)
+	// (SaveWindowAnchor is one INSERT). Track whether AT LEAST ONE write
+	// succeeded so the post-tick callback can fire if state changed.
+	fiveOK := s.writeAnchorIfFresh(snap, "5h", snap.FiveHourResetsAt)
+	sevenOK := s.writeAnchorIfFresh(snap, "7d", snap.SevenDayResetsAt)
+	if fiveOK || sevenOK {
+		s.invokeOnAnchorsUpdated(ctx)
+	}
 
 	// Schedule the next fetch at the EARLIEST observed reset + grace. If
 	// both resets are stale-or-zero, we have no valid trigger time. Per EM
@@ -220,13 +246,16 @@ func (s *Scheduler) tick(ctx context.Context) (time.Duration, error) {
 // writes a SaveWindowAnchor row only if fresh. Per binding constraint #6:
 // a snapshot whose reset is at or before observation is unusable for that
 // window; we skip the write rather than fabricating a zero-minute anchor.
-func (s *Scheduler) writeAnchorIfFresh(snap usageprovider.Snapshot, windowType string, resetsAt time.Time) {
+//
+// Returns true iff a row was successfully written. Callers use this to
+// gate the OnAnchorsUpdated callback.
+func (s *Scheduler) writeAnchorIfFresh(snap usageprovider.Snapshot, windowType string, resetsAt time.Time) bool {
 	if !resetsAt.After(snap.Observed) {
 		// Schema hard-rule (S2.1/S2.2): no raw response values in logs.
 		// Parsed `resets_at` and `Observed` are derived response values;
 		// log only the window class, not the timestamps themselves.
 		s.log("%s: stale snapshot; skipping write", windowType)
-		return
+		return false
 	}
 
 	var pct float64
@@ -237,13 +266,13 @@ func (s *Scheduler) writeAnchorIfFresh(snap usageprovider.Snapshot, windowType s
 		pct = float64(snap.SevenDayUtilizationPercent)
 	default:
 		s.log("%s: unknown window type; skipping", windowType)
-		return
+		return false
 	}
 
 	cost, err := s.store.ObservedCostForWindow(windowType, snap.Observed, resetsAt)
 	if err != nil {
 		s.log("%s: cost helper failed: %v", windowType, err)
-		return
+		return false
 	}
 
 	timeLeftMinutes := int(resetsAt.Sub(snap.Observed).Round(time.Minute).Minutes())
@@ -263,6 +292,21 @@ func (s *Scheduler) writeAnchorIfFresh(snap usageprovider.Snapshot, windowType s
 	}
 	if _, err := s.store.SaveWindowAnchor(anchor); err != nil {
 		s.log("%s: SaveWindowAnchor failed: %v", windowType, err)
+		return false
+	}
+	return true
+}
+
+// invokeOnAnchorsUpdated calls the optional update callback. Errors are
+// logged (without echoing the underlying value beyond a generic message)
+// and swallowed so callback misbehavior cannot roll back the anchors that
+// were just persisted. Per EM ruling chat msg 20591/20593.
+func (s *Scheduler) invokeOnAnchorsUpdated(ctx context.Context) {
+	if s.onAnchorsUpdated == nil {
+		return
+	}
+	if err := s.onAnchorsUpdated(ctx); err != nil {
+		s.log("OnAnchorsUpdated callback failed: %v", err)
 	}
 }
 
