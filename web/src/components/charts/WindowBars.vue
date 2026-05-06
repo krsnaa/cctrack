@@ -66,6 +66,9 @@
 import { computed, onMounted, onUnmounted, ref } from 'vue'
 import type { WindowBucket } from '../../types'
 import { triggerUsageSync } from '../../api'
+import { useDashboardStore } from '../../stores/dashboard'
+
+const store = useDashboardStore()
 
 const props = defineProps<{
   fiveHour: WindowBucket | null
@@ -94,19 +97,37 @@ onUnmounted(() => {
 // are safely no-ops; we still disable the button while a request is
 // in flight for UX clarity. Failure surfaces through the per-bar
 // honest-state badge (no parallel toast/error UI).
+//
+// Refresh policy: success paths emit summary.updated via the websocket
+// when an anchor is written, but failure statuses (token_expired,
+// unauthorized, schema_drift, provider_unavailable, rate_limited,
+// credentials_*) write no anchor and broadcast nothing. So we
+// explicitly refresh the summary for any terminal status — that's what
+// repaints the per-bar honest-state badge. in_progress is benign
+// (single-flight detected a duplicate; nothing changed) and skips it.
 const syncing = ref(false)
+async function safeRefreshSummary() {
+  try {
+    await store.refreshSummary()
+  } catch {
+    // Refresh failure must not escape the click handler. The next
+    // websocket summary.updated or page navigation will recover.
+  }
+}
 async function onResyncClick(e: MouseEvent) {
   e.stopPropagation()
   if (syncing.value) return
   syncing.value = true
   try {
-    await triggerUsageSync()
-    // The backend OnAnchorsUpdated callback broadcasts a fresh summary
-    // through the websocket hub when any anchor was written, so the
-    // dashboard refreshes automatically on success.
+    const status = await triggerUsageSync()
+    if (status.status !== 'in_progress') {
+      await safeRefreshSummary()
+    }
   } catch {
-    // Network/HTTP failure: state will resolve via the honest-state badge
-    // on the next summary update; nothing to surface here.
+    // Network/HTTP failure on the POST itself. Try a refresh anyway —
+    // backend may have updated honest-state classification before the
+    // response failed.
+    await safeRefreshSummary()
   } finally {
     syncing.value = false
   }
