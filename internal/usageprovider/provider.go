@@ -21,10 +21,23 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sync"
 	"time"
 
 	"github.com/ksred/cctrack/internal/credentials"
+)
+
+// rfc3339Pattern is a strict shape gate for resets_at values. Go's
+// time.Parse with the RFC3339Nano layout falls through to a generic
+// layout parser that accepts widenings (e.g. comma fractional
+// separator) which RFC3339 forbids. The regex pre-check rejects those
+// inputs before time.Parse can be lenient. Per F2 S2.2 EM ruling msg
+// 20565 binding constraint #3 + verifier finding chat msg 20579.
+//
+//	YYYY-MM-DDTHH:MM:SS[.fractional]Z|±HH:MM
+var rfc3339Pattern = regexp.MustCompile(
+	`^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+-][0-9]{2}:[0-9]{2})$`,
 )
 
 const (
@@ -182,13 +195,20 @@ func (c *Client) Fetch(ctx context.Context, creds credentials.Credentials) (Snap
 }
 
 // parseResetsAt accepts only RFC3339 / RFC3339Nano timestamps. Any other
-// format (including Go's other time layouts, Unix epoch, or natural-language
-// dates) is rejected. Per F2 S2.2 EM ruling msg 20565 binding constraint #3,
-// the parser MUST fail closed on unrecognized formats; widening to print
-// observed value formats is forbidden.
+// format (including Go's other time layouts, Unix epoch, comma fractional
+// separators, or natural-language dates) is rejected. Per F2 S2.2 EM
+// ruling msg 20565 binding constraint #3 + verifier finding chat msg
+// 20579, the parser MUST fail closed on unrecognized formats; widening
+// to print observed value formats is forbidden.
+//
+// The shape pre-check via rfc3339Pattern is load-bearing: time.Parse(
+// RFC3339Nano) alone would accept widenings like "2026-05-06T17:00:00,123Z"
+// because Go's generic layout fallback honors comma fractional separators
+// even though RFC3339 secfrac requires '.'.
 func parseResetsAt(s string) (time.Time, error) {
-	// time.RFC3339Nano is a strict superset of time.RFC3339 (the nanosecond
-	// fraction is optional). One Parse call suffices.
+	if !rfc3339Pattern.MatchString(s) {
+		return time.Time{}, errors.New("not RFC3339")
+	}
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
 		// Note: error message intentionally does NOT include the input string,

@@ -174,6 +174,32 @@ func TestFetch_HTTPMatrix(t *testing.T) {
 			wantErr: ErrSchemaDrift,
 		},
 		{
+			// Per codex-2 chat msg 20579: Go's time.Parse(RFC3339Nano)
+			// falls back to a generic layout parser that accepts comma
+			// fractional separators ("2026-05-06T17:00:00,123Z"), which
+			// RFC3339 secfrac forbids. The shape pre-check rejects this.
+			name: "200 resets_at with comma fractional separator rejected (RFC3339-only bar)",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, fmt.Sprintf(
+					`{"five_hour":{"utilization":1,"resets_at":"2026-05-06T17:00:00,123Z"},"seven_day":{"utilization":2,"resets_at":%q}}`,
+					sevenDayResetsAtRFC3339))
+			},
+			creds:   validCreds(),
+			wantErr: ErrSchemaDrift,
+		},
+		{
+			// Trailing whitespace was another generic-layout leniency
+			// historically; the shape pre-check disallows it.
+			name: "200 resets_at with trailing whitespace rejected",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				_, _ = io.WriteString(w, fmt.Sprintf(
+					`{"five_hour":{"utilization":1,"resets_at":"2026-05-06T17:00:00Z "},"seven_day":{"utilization":2,"resets_at":%q}}`,
+					sevenDayResetsAtRFC3339))
+			},
+			creds:   validCreds(),
+			wantErr: ErrSchemaDrift,
+		},
+		{
 			name: "200 missing five_hour.utilization",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				_, _ = io.WriteString(w, `{"five_hour":{},"seven_day":{"utilization":1}}`)
