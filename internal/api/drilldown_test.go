@@ -24,7 +24,9 @@ func newDrilldownHarness(t *testing.T) (*api.API, *store.Store) {
 		t.Fatalf("opening store: %v", err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	a := api.New(s, nil, nil)
+	// Drilldown tests don't exercise /api/v1/summary, so a stub SummaryFunc
+	// that returns the raw store summary is sufficient for api.New.
+	a := api.New(s, nil, nil, s.GetSummary)
 	return a, s
 }
 

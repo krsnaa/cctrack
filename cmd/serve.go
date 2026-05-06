@@ -21,6 +21,7 @@ import (
 	"github.com/ksred/cctrack/internal/store"
 	"github.com/ksred/cctrack/internal/usageprovider"
 	"github.com/ksred/cctrack/internal/usagescheduler"
+	"github.com/ksred/cctrack/internal/usagestate"
 	"github.com/ksred/cctrack/internal/watcher"
 	"github.com/spf13/cobra"
 )
@@ -59,6 +60,35 @@ var serveCmd = &cobra.Command{
 		h.Start()
 		defer h.Stop()
 
+		// Auto-sync scheduler (F2 S2.2): the value is constructed up front
+		// because both the watcher closure and the api handler need a
+		// reference to the summaryProvider built on top of it. The scheduler
+		// goroutine itself is spawned later, after ctx is ready.
+		schedProvider := usageprovider.New()
+		schedLogger := func(format string, args ...any) {
+			log.Printf("usagescheduler: "+format, args...)
+		}
+		sched := usagescheduler.New(schedProvider, credentials.Load, s, schedLogger)
+
+		// SummaryProvider is the SINGLE chokepoint for emitting augmented
+		// summary payloads (per F2 S2.3 EM ruling chat msg 20621). All four
+		// emission paths — REST /api/v1/summary, websocket-initial,
+		// watcher broadcasts, scheduler broadcasts — call summaryProvider.Build
+		// so the additive honest-state fields are populated consistently.
+		summaryProvider := usagestate.NewSummaryProvider(s, sched)
+		broadcastSummary := func() error {
+			summary, err := summaryProvider.Build()
+			if err != nil {
+				return fmt.Errorf("get summary: %w", err)
+			}
+			payload, err := json.Marshal(summary)
+			if err != nil {
+				return fmt.Errorf("marshal summary: %w", err)
+			}
+			h.Broadcast("summary.updated", payload)
+			return nil
+		}
+
 		// Start watcher
 		w, err := watcher.New(cfg.LogDir, 250*time.Millisecond, func(paths []string) {
 			affected, err := p.ParseFiles(paths)
@@ -75,11 +105,10 @@ var serveCmd = &cobra.Command{
 						h.Broadcast("session.updated", payload)
 					}
 				}
-				// Broadcast summary update
-				summary, err := s.GetSummary()
-				if err == nil {
-					payload, _ := json.Marshal(summary)
-					h.Broadcast("summary.updated", payload)
+				// Broadcast summary update via the single augmentation
+				// chokepoint so honest-state fields are present.
+				if err := broadcastSummary(); err != nil {
+					log.Printf("watcher broadcast: %v", err)
 				}
 			}
 		})
@@ -100,7 +129,7 @@ var serveCmd = &cobra.Command{
 		}
 
 		mux := http.NewServeMux()
-		apiHandler := api.New(s, h, cfg)
+		apiHandler := api.New(s, h, cfg, summaryProvider.Build)
 		apiHandler.RegisterRoutes(mux)
 		mux.Handle("/", api.SPAHandler(webFS))
 
@@ -119,38 +148,16 @@ var serveCmd = &cobra.Command{
 		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 		defer stop()
 
-		// Auto-sync scheduler (F2 S2.2): refresh window_anchors rows from
-		// /api/oauth/usage in the background. Stops auto-refresh cleanly on
-		// permanent errors (credentials missing/expired, unauthorized, schema
-		// drift); the manual-sync POST /api/v1/window-anchors flow remains
-		// available as fallback. The scheduler shares its observed-cost math
-		// with the manual-sync handler via store.ObservedCostForWindow, so the
-		// two flows cannot drift.
-		//
-		// The OnAnchorsUpdated callback (per EM ruling chat msg 20591/20593)
-		// broadcasts a fresh summary through the websocket hub when the
-		// scheduler writes at least one anchor; this drives live dashboard
-		// freshness for auto-sync the same way the watcher drives it for
-		// log-file events. The scheduler itself does not import api/hub;
-		// cmd/serve owns the broadcast wiring.
-		schedProvider := usageprovider.New()
-		schedLogger := func(format string, args ...any) {
-			log.Printf("usagescheduler: "+format, args...)
-		}
+		// Auto-sync scheduler runtime wiring (F2 S2.2 + S2.3):
+		// the OnAnchorsUpdated callback broadcasts a fresh augmented
+		// summary through the websocket hub when the scheduler writes
+		// at least one anchor (per EM ruling chat msg 20591/20593).
+		// Routes through the same single broadcastSummary chokepoint
+		// the watcher uses, so honest-state fields are present.
 		schedOnUpdate := func(_ context.Context) error {
-			summary, err := s.GetSummary()
-			if err != nil {
-				return fmt.Errorf("get summary: %w", err)
-			}
-			payload, err := json.Marshal(summary)
-			if err != nil {
-				return fmt.Errorf("marshal summary: %w", err)
-			}
-			h.Broadcast("summary.updated", payload)
-			return nil
+			return broadcastSummary()
 		}
-		sched := usagescheduler.New(schedProvider, credentials.Load, s, schedLogger).
-			WithOnAnchorsUpdated(schedOnUpdate)
+		sched.WithOnAnchorsUpdated(schedOnUpdate)
 		schedDone := make(chan struct{})
 		go func() {
 			sched.Run(ctx)
