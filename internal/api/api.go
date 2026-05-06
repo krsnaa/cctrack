@@ -14,14 +14,22 @@ import (
 	"github.com/ksred/cctrack/internal/store"
 )
 
+// SummaryFunc returns the augmented summary payload for /api/v1/summary
+// and the websocket-initial broadcast. cmd/serve wires this to
+// usagestate.SummaryProvider.Build so the per-window honest-state fields
+// are populated. Per F2 S2.3 EM ruling chat msg 20621: every summary
+// emission path must use the same augmentation chokepoint.
+type SummaryFunc func() (*store.Summary, error)
+
 type API struct {
-	store *store.Store
-	hub   *hub.Hub
-	cfg   *config.Config
+	store      *store.Store
+	hub        *hub.Hub
+	cfg        *config.Config
+	getSummary SummaryFunc
 }
 
-func New(s *store.Store, h *hub.Hub, cfg *config.Config) *API {
-	return &API{store: s, hub: h, cfg: cfg}
+func New(s *store.Store, h *hub.Hub, cfg *config.Config, getSummary SummaryFunc) *API {
+	return &API{store: s, hub: h, cfg: cfg, getSummary: getSummary}
 }
 
 func (a *API) RegisterRoutes(mux *http.ServeMux) {
@@ -48,7 +56,7 @@ func (a *API) RegisterRoutes(mux *http.ServeMux) {
 }
 
 func (a *API) handleSummary(w http.ResponseWriter, r *http.Request) {
-	summary, err := a.store.GetSummary()
+	summary, err := a.getSummary()
 	if err != nil {
 		http.Error(w, err.Error(), 500)
 		return
@@ -386,8 +394,9 @@ func (a *API) handleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send initial summary snapshot
-	summary, err := a.store.GetSummary()
+	// Send initial summary snapshot — uses the augmented getSummary so
+	// honest-state fields are present on first connect.
+	summary, err := a.getSummary()
 	if err == nil {
 		payload, _ := json.Marshal(summary)
 		event := hub.Event{Type: "summary.updated", Payload: payload}

@@ -35,6 +35,15 @@ type WindowBucket struct {
 	// Surfaced on the bar so a stale anchor is visible at a glance — sync
 	// drift accumulates and re-syncs are how the user corrects it.
 	LastSyncedAt *string `json:"last_synced_at,omitempty"`
+	// State is the per-window honest-state enum populated by
+	// internal/usagestate.SummaryProvider.Build before any summary payload
+	// is emitted (REST, WS-initial, watcher broadcast, scheduler broadcast).
+	// One of: auto_fresh, auto_stale, token_expired, provider_unavailable,
+	// manual_anchor, fallback_cascade, unknown. Nil when no augmentation
+	// has been performed (e.g. tests reading raw GetSummary). UI matches
+	// the string against its render branches; see F2 S2.3 evidence
+	// requirements + LAD v0.5.
+	State *string `json:"state,omitempty"`
 }
 
 type SpendBucket struct {
