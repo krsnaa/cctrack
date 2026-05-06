@@ -394,9 +394,11 @@ var projectGroupSortColumns = map[string]string{
 
 // GetProjectGroups returns project-level rollups for the Sessions grouped view.
 // When date is "" all projects are returned; otherwise only projects with at
-// least one session whose local-day last_activity equals `date`. Roll-up totals
-// are computed from the *full lifetime* of those matching sessions, matching
-// the semantic the Daily Spend chart already uses.
+// least one session whose local-day `last_activity` equals `date`. Roll-up
+// totals are session-lifetime — NOT day-scoped. This is the canonical
+// browse view (Invariant B) and intentionally differs from request-day
+// totals; for day-scoped per-request spend (e.g. the daily-bar drilldown),
+// use GetDayDrilldown / `/api/v1/day-drilldown`.
 func (s *Store) GetProjectGroups(date, sortBy, sortDir string) ([]ProjectGroup, error) {
 	col, ok := projectGroupSortColumns[sortBy]
 	if !ok {
