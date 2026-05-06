@@ -9,6 +9,8 @@ actively uses are listed here; account-shaped fields are deliberately
 | ------------------------- | ------ | ------------------------------------ | ------------------------------------------------ |
 | `five_hour.utilization`   | number | `usageprovider.Snapshot.FiveHourUtilizationPercent`   | Integer 0–100 representing 5-hour window utilization. Treated as percentage. |
 | `seven_day.utilization`   | number | `usageprovider.Snapshot.SevenDayUtilizationPercent`   | Integer 0–100 representing 7-day window utilization. Treated as percentage. |
+| `five_hour.resets_at`     | string | `usageprovider.Snapshot.FiveHourResetsAt`             | RFC3339 / RFC3339Nano timestamp; the moment the rolling 5-hour window resets. Parser normalizes to UTC; non-RFC3339 formats fail closed with `ErrSchemaDrift`. |
+| `seven_day.resets_at`     | string | `usageprovider.Snapshot.SevenDayResetsAt`             | RFC3339 / RFC3339Nano timestamp; the moment the rolling 7-day window resets. Parser normalizes to UTC; non-RFC3339 formats fail closed with `ErrSchemaDrift`. |
 
 ## Discovery posture
 
@@ -39,12 +41,17 @@ fields are truly time-state vs. account-shaped.
    new field is observed, add it to the table above by hand with an
    explicit note about why surfacing its value is non-sensitive.
 
-## Hard rules (binding per F2 S2.1 verifier bars)
+## Hard rules (binding per F2 S2.1 + S2.2 verifier bars)
 
 - **Allowlist-only**: only fields named here are parsed by `usageprovider`.
-- **Fail-closed on used fields**: if `five_hour.utilization` or
-  `seven_day.utilization` is missing from a 200 response, the adapter
-  returns `ErrSchemaDrift` rather than partial data.
+- **Fail-closed on used fields**: if any of `five_hour.utilization`,
+  `seven_day.utilization`, `five_hour.resets_at`, or `seven_day.resets_at`
+  is missing from a 200 response, the adapter returns `ErrSchemaDrift`
+  rather than partial data.
+- **`resets_at` parse strictness**: only RFC3339 / RFC3339Nano formats
+  accepted. Non-conforming values fail closed with `ErrSchemaDrift`. The
+  probe is NOT widened to print value formats; if a different format is
+  observed in live smoke, escalate to EM with no values pasted.
 - **Ignore unknown extras**: extra response fields (whose names are not
   documented here) MUST NOT be treated as drift; the parser ignores them.
 - **No raw response in logs/commits/chat**: not in error strings, not in
