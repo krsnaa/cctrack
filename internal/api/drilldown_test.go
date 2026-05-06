@@ -164,6 +164,11 @@ func TestHandleDayDrilldown_BadDate_400(t *testing.T) {
 		{"missing-zero-pad", "/api/v1/day-drilldown?date=2026-4-24"},
 		{"trailing-junk", "/api/v1/day-drilldown?date=2026-04-24T"},
 		{"two-digit-year", "/api/v1/day-drilldown?date=26-04-24"},
+		{"month-out-of-range", "/api/v1/day-drilldown?date=2026-13-01"},
+		{"day-out-of-range-feb", "/api/v1/day-drilldown?date=2026-02-30"},
+		{"non-leap-year-feb-29", "/api/v1/day-drilldown?date=2025-02-29"},
+		{"month-zero", "/api/v1/day-drilldown?date=2026-00-15"},
+		{"day-zero", "/api/v1/day-drilldown?date=2026-04-00"},
 	}
 	for _, c := range cases {
 		t.Run(c.label, func(t *testing.T) {

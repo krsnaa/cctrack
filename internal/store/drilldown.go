@@ -2,7 +2,7 @@ package store
 
 import (
 	"fmt"
-	"regexp"
+	"time"
 )
 
 // DayDrilldown is the response shape for the daily-spend bar click-through.
@@ -37,17 +37,22 @@ type DaySessionRow struct {
 	LifetimeCost    float64 `json:"lifetime_cost"`
 }
 
-var dayDrilldownDateRE = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
-
-// ValidateDrilldownDate enforces the YYYY-MM-DD shape the drilldown query
-// expects. Surfaced as a separate function so the API handler can return 400
-// on bad input without touching the DB.
+// ValidateDrilldownDate enforces both the YYYY-MM-DD shape AND calendar
+// validity the drilldown query expects. Surfaced as a separate function so
+// the API handler can return 400 on bad input without touching the DB.
+//
+// time.Parse("2006-01-02") is strict on both axes: the fixed-width layout
+// rejects un-zero-padded inputs (`2026-4-24`), trailing junk (`2026-04-24T`),
+// and wrong separators (`2026/04/24`); the underlying calendar logic rejects
+// out-of-range months (`2026-13-01`), out-of-range days (`2026-02-30`), and
+// non-leap-year Feb 29 (`2025-02-29`). Together these cover both the shape
+// and semantic-validity bars.
 func ValidateDrilldownDate(date string) error {
 	if date == "" {
 		return fmt.Errorf("date is required (format YYYY-MM-DD)")
 	}
-	if !dayDrilldownDateRE.MatchString(date) {
-		return fmt.Errorf("date must be YYYY-MM-DD; got %q", date)
+	if _, err := time.Parse("2006-01-02", date); err != nil {
+		return fmt.Errorf("date must be a valid YYYY-MM-DD; got %q: %w", date, err)
 	}
 	return nil
 }

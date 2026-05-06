@@ -435,6 +435,7 @@ func TestValidateDrilldownDate(t *testing.T) {
 	}{
 		{"2026-04-24", false},
 		{"2026-12-31", false},
+		{"2024-02-29", false}, // 2024 is a leap year
 		{"", true},
 		{"yesterday", true},
 		{"2026/04/24", true},
@@ -442,6 +443,11 @@ func TestValidateDrilldownDate(t *testing.T) {
 		{"2026-4-24", true},   // missing leading zero
 		{"2026-04-24T", true}, // trailing junk
 		{"26-04-24", true},    // 2-digit year
+		{"2026-13-01", true},  // month out of range
+		{"2026-02-30", true},  // day out of range for Feb
+		{"2025-02-29", true},  // non-leap-year Feb 29
+		{"2026-00-15", true},  // month zero
+		{"2026-04-00", true},  // day zero
 	}
 	for _, c := range cases {
 		t.Run(c.input, func(t *testing.T) {
