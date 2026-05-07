@@ -37,7 +37,7 @@ func runningWithSuccess() usagescheduler.State {
 func TestDeriveWindowState_AutoFresh(t *testing.T) {
 	// Scheduler running + last fetch successful + anchor with future reset.
 	anchor := validAnchor(fixedNow.Add(-30*time.Minute), 240) // resets 3.5h from now
-	got := DeriveWindowState(runningWithSuccess(), anchor, fixedNow)
+	got := DeriveWindowState(runningWithSuccess(), "5h", anchor, fixedNow)
 	if got != WindowHonestStateAutoFresh {
 		t.Errorf("got %v (%q), want WindowHonestStateAutoFresh", got, got.String())
 	}
@@ -46,7 +46,7 @@ func TestDeriveWindowState_AutoFresh(t *testing.T) {
 func TestDeriveWindowState_AutoStale(t *testing.T) {
 	// Scheduler running + last fetch successful + anchor with past reset.
 	anchor := validAnchor(fixedNow.Add(-6*time.Hour), 60) // resets 5h ago
-	got := DeriveWindowState(runningWithSuccess(), anchor, fixedNow)
+	got := DeriveWindowState(runningWithSuccess(), "5h", anchor, fixedNow)
 	if got != WindowHonestStateAutoStale {
 		t.Errorf("got %v (%q), want WindowHonestStateAutoStale", got, got.String())
 	}
@@ -72,7 +72,7 @@ func TestDeriveWindowState_TokenExpired_AllCredentialAndAuthClasses(t *testing.T
 				Running:        false, // permanent error stops Run()
 				LastErrorClass: c.ec,
 			}
-			got := DeriveWindowState(st, freshAnchor, fixedNow)
+			got := DeriveWindowState(st, "5h", freshAnchor, fixedNow)
 			if got != WindowHonestStateTokenExpired {
 				t.Errorf("error class %v gave %v (%q); want WindowHonestStateTokenExpired", c.ec, got, got.String())
 			}
@@ -99,7 +99,7 @@ func TestDeriveWindowState_ProviderUnavailable_AllProviderClasses(t *testing.T) 
 				Running:        c.ec != usagescheduler.ErrorClassSchemaDrift, // schema drift stops; transient classes continue
 				LastErrorClass: c.ec,
 			}
-			got := DeriveWindowState(st, freshAnchor, fixedNow)
+			got := DeriveWindowState(st, "5h", freshAnchor, fixedNow)
 			if got != WindowHonestStateProviderUnavailable {
 				t.Errorf("error class %v gave %v (%q); want WindowHonestStateProviderUnavailable", c.ec, got, got.String())
 			}
@@ -114,7 +114,7 @@ func TestDeriveWindowState_ManualAnchor_SchedulerNotRunning(t *testing.T) {
 		Running:        false,
 		LastErrorClass: usagescheduler.ErrorClassNone,
 	}
-	got := DeriveWindowState(st, anchor, fixedNow)
+	got := DeriveWindowState(st, "5h", anchor, fixedNow)
 	if got != WindowHonestStateManualAnchor {
 		t.Errorf("got %v (%q), want WindowHonestStateManualAnchor", got, got.String())
 	}
@@ -130,7 +130,7 @@ func TestDeriveWindowState_ManualAnchor_SchedulerRunningButNeverSucceeded(t *tes
 		LastFetchSucceeded: time.Time{}, // never succeeded
 		LastErrorClass:     usagescheduler.ErrorClassNone,
 	}
-	got := DeriveWindowState(st, anchor, fixedNow)
+	got := DeriveWindowState(st, "5h", anchor, fixedNow)
 	if got != WindowHonestStateManualAnchor {
 		t.Errorf("got %v (%q), want WindowHonestStateManualAnchor (no fetch yet → cannot claim auto)", got, got.String())
 	}
@@ -139,7 +139,7 @@ func TestDeriveWindowState_ManualAnchor_SchedulerRunningButNeverSucceeded(t *tes
 func TestDeriveWindowState_FallbackCascade_NoAnchor(t *testing.T) {
 	// No anchor exists: cascade only.
 	st := runningWithSuccess()
-	got := DeriveWindowState(st, nil, fixedNow)
+	got := DeriveWindowState(st, "5h", nil, fixedNow)
 	if got != WindowHonestStateFallbackCascade {
 		t.Errorf("got %v (%q), want WindowHonestStateFallbackCascade", got, got.String())
 	}
@@ -149,7 +149,7 @@ func TestDeriveWindowState_FallbackCascade_NoAnchor(t *testing.T) {
 // verifies that a missing anchor takes priority over scheduler-running
 // auto state (since auto needs an anchor to render).
 func TestDeriveWindowState_FallbackCascade_NoAnchorOverridesSchedulerState(t *testing.T) {
-	got := DeriveWindowState(runningWithSuccess(), nil, fixedNow)
+	got := DeriveWindowState(runningWithSuccess(), "5h", nil, fixedNow)
 	if got != WindowHonestStateFallbackCascade {
 		t.Errorf("got %v; running scheduler with no anchor should still be cascade (no data to render auto)", got)
 	}
@@ -167,7 +167,7 @@ func TestDeriveWindowState_ErrorClassPrecedesAnchor(t *testing.T) {
 		LastFetchSucceeded: fixedNow.Add(-2 * time.Hour),                  // some prior success
 		LastErrorClass:     usagescheduler.ErrorClassTokenExpired,
 	}
-	got := DeriveWindowState(st, anchor, fixedNow)
+	got := DeriveWindowState(st, "5h", anchor, fixedNow)
 	if got != WindowHonestStateTokenExpired {
 		t.Errorf("got %v; permanent error class must take precedence over anchor freshness", got)
 	}
@@ -182,7 +182,7 @@ func TestDeriveWindowState_Unknown_CorruptAnchorSyncedAt(t *testing.T) {
 		SyncedAt:        "not-a-date-at-all",
 		TimeLeftMinutes: 60,
 	}
-	got := DeriveWindowState(runningWithSuccess(), corrupt, fixedNow)
+	got := DeriveWindowState(runningWithSuccess(), "5h", corrupt, fixedNow)
 	if got != WindowHonestStateUnknown {
 		t.Errorf("got %v; corrupt anchor SyncedAt should map to Unknown", got)
 	}
@@ -218,8 +218,156 @@ func TestDeriveWindowState_AnchorResetsAtBoundary(t *testing.T) {
 	// resets_at = fixedNow exactly.
 	anchor := validAnchor(fixedNow.Add(-30*time.Minute), 30)
 	st := runningWithSuccess()
-	got := DeriveWindowState(st, anchor, fixedNow)
+	got := DeriveWindowState(st, "5h", anchor, fixedNow)
 	if got != WindowHonestStateAutoStale {
 		t.Errorf("got %v; resets_at == now (not strictly future) should be AutoStale", got)
+	}
+}
+
+// --- F8 tests: provider-written anchor recognition with Running=false --
+
+// withProviderMeta clones a State and stamps a ProviderAnchorMeta entry
+// for the given windowType. Returned State is otherwise unchanged.
+func withProviderMeta(base usagescheduler.State, windowType string, meta usagescheduler.ProviderAnchorMeta) usagescheduler.State {
+	out := base
+	out.ProviderAnchors = make(map[string]usagescheduler.ProviderAnchorMeta)
+	for k, v := range base.ProviderAnchors {
+		out.ProviderAnchors[k] = v
+	}
+	out.ProviderAnchors[windowType] = meta
+	return out
+}
+
+// stoppedSchedulerNoError simulates the scheduler having exited cleanly:
+// Run() set Running=false, no error class outstanding (e.g. earlier
+// permanent error was followed by a successful manual SyncOnce that
+// cleared the class via recordFetchSuccess).
+func stoppedSchedulerNoError() usagescheduler.State {
+	return usagescheduler.State{
+		Running:            false,
+		LastFetchSucceeded: fixedNow.Add(-1 * time.Minute),
+		LastErrorClass:     usagescheduler.ErrorClassNone,
+	}
+}
+
+// TestDeriveWindowState_F8_PostStopSyncOnceAuto pins codex bar #1: after
+// a permanent-error scheduler stop is followed by a successful SyncOnce,
+// the latest stored anchor matches in-memory provider metadata, so the
+// derivation returns AutoFresh even though Running=false.
+func TestDeriveWindowState_F8_PostStopSyncOnceAuto(t *testing.T) {
+	anchor := validAnchor(fixedNow.Add(-30*time.Minute), 240) // 3.5h future reset
+	anchor.ID = 42
+	st := withProviderMeta(stoppedSchedulerNoError(), "5h", usagescheduler.ProviderAnchorMeta{
+		ID:              42,
+		SyncedAt:        anchor.SyncedAt,
+		TimeLeftMinutes: 240,
+	})
+	got := DeriveWindowState(st, "5h", anchor, fixedNow)
+	if got != WindowHonestStateAutoFresh {
+		t.Errorf("got %v (%q), want AutoFresh — provider-written anchor must classify auto despite Running=false", got, got.String())
+	}
+}
+
+// TestDeriveWindowState_F8_NewerManualAnchorOverridesProviderMeta pins
+// codex bar #2: provider metadata recorded a previous anchor X, but the
+// latest stored anchor is Y (different ID). Derivation must classify Y
+// as ManualAnchor, NOT auto, so old provider metadata cannot retroactively
+// bless a manual entry.
+func TestDeriveWindowState_F8_NewerManualAnchorOverridesProviderMeta(t *testing.T) {
+	anchorX := validAnchor(fixedNow.Add(-30*time.Minute), 240)
+	anchorX.ID = 42
+	// Manual anchor Y written after X, different content.
+	anchorY := validAnchor(fixedNow.Add(-10*time.Minute), 120)
+	anchorY.ID = 43
+	st := withProviderMeta(stoppedSchedulerNoError(), "5h", usagescheduler.ProviderAnchorMeta{
+		ID:              anchorX.ID,
+		SyncedAt:        anchorX.SyncedAt,
+		TimeLeftMinutes: anchorX.TimeLeftMinutes,
+	})
+	got := DeriveWindowState(st, "5h", anchorY, fixedNow)
+	if got != WindowHonestStateManualAnchor {
+		t.Errorf("got %v (%q), want ManualAnchor — newer manual anchor must NOT inherit prior provider metadata", got, got.String())
+	}
+}
+
+// TestDeriveWindowState_F8_PartialProviderWrite pins codex bar #3:
+// SyncOnce wrote 5h but skipped 7d (stale resets_at). ProviderAnchors
+// has only "5h"; 7d's stored anchor is some pre-existing manual entry.
+// Derivation classifies 5h auto and 7d manual.
+func TestDeriveWindowState_F8_PartialProviderWrite(t *testing.T) {
+	anchor5h := validAnchor(fixedNow.Add(-30*time.Minute), 240)
+	anchor5h.ID = 100
+	anchor5h.WindowType = "5h"
+	anchor7d := validAnchor(fixedNow.Add(-1*time.Hour), 600)
+	anchor7d.ID = 99
+	anchor7d.WindowType = "7d"
+	// Only 5h has provider metadata recorded.
+	st := withProviderMeta(stoppedSchedulerNoError(), "5h", usagescheduler.ProviderAnchorMeta{
+		ID:              100,
+		SyncedAt:        anchor5h.SyncedAt,
+		TimeLeftMinutes: 240,
+	})
+	if got := DeriveWindowState(st, "5h", anchor5h, fixedNow); got != WindowHonestStateAutoFresh {
+		t.Errorf("5h: got %v, want AutoFresh (matching provider meta)", got)
+	}
+	if got := DeriveWindowState(st, "7d", anchor7d, fixedNow); got != WindowHonestStateManualAnchor {
+		t.Errorf("7d: got %v, want ManualAnchor (no provider meta for 7d)", got)
+	}
+}
+
+// TestDeriveWindowState_F8_StaleProviderAnchor pins the auto_stale path
+// for the new branch: provider metadata matches but the anchor's reset
+// is in the past. Returns AutoStale, not ManualAnchor.
+func TestDeriveWindowState_F8_StaleProviderAnchor(t *testing.T) {
+	anchor := validAnchor(fixedNow.Add(-6*time.Hour), 60) // resets 5h ago
+	anchor.ID = 7
+	st := withProviderMeta(stoppedSchedulerNoError(), "5h", usagescheduler.ProviderAnchorMeta{
+		ID:              7,
+		SyncedAt:        anchor.SyncedAt,
+		TimeLeftMinutes: 60,
+	})
+	got := DeriveWindowState(st, "5h", anchor, fixedNow)
+	if got != WindowHonestStateAutoStale {
+		t.Errorf("got %v (%q), want AutoStale — provider-written anchor with elapsed reset is stale, not manual", got, got.String())
+	}
+}
+
+// TestDeriveWindowState_F8_RunningSchedulerStillUsesRunningPath pins
+// codex bar #4: when Running=true && LastFetchSucceeded != zero, the
+// existing path is taken regardless of whether ProviderAnchors is set.
+// Behavior of the running scheduler must be unchanged.
+func TestDeriveWindowState_F8_RunningSchedulerStillUsesRunningPath(t *testing.T) {
+	anchor := validAnchor(fixedNow.Add(-30*time.Minute), 240)
+	anchor.ID = 555
+	// (a) Running with ProviderAnchors unset.
+	if got := DeriveWindowState(runningWithSuccess(), "5h", anchor, fixedNow); got != WindowHonestStateAutoFresh {
+		t.Errorf("Running=true, no ProviderAnchors: got %v, want AutoFresh", got)
+	}
+	// (b) Running with ProviderAnchors deliberately mismatched (different
+	// ID). The existing Running-path classifies first, so the mismatched
+	// metadata is irrelevant.
+	stMismatch := withProviderMeta(runningWithSuccess(), "5h", usagescheduler.ProviderAnchorMeta{
+		ID: 999, SyncedAt: "different", TimeLeftMinutes: 1,
+	})
+	if got := DeriveWindowState(stMismatch, "5h", anchor, fixedNow); got != WindowHonestStateAutoFresh {
+		t.Errorf("Running=true, mismatched ProviderAnchors: got %v, want AutoFresh — running path takes precedence", got)
+	}
+}
+
+// TestDeriveWindowState_F8_IDMismatchWithStringMatch pins codex bar from
+// msg 20764: even when SyncedAt and TimeLeftMinutes happen to match, an
+// ID mismatch must classify as ManualAnchor. Belt-and-suspenders fields
+// alone are not sufficient.
+func TestDeriveWindowState_F8_IDMismatchWithStringMatch(t *testing.T) {
+	anchor := validAnchor(fixedNow.Add(-30*time.Minute), 240)
+	anchor.ID = 7
+	st := withProviderMeta(stoppedSchedulerNoError(), "5h", usagescheduler.ProviderAnchorMeta{
+		ID:              8, // differs from anchor.ID
+		SyncedAt:        anchor.SyncedAt,
+		TimeLeftMinutes: anchor.TimeLeftMinutes,
+	})
+	got := DeriveWindowState(st, "5h", anchor, fixedNow)
+	if got != WindowHonestStateManualAnchor {
+		t.Errorf("got %v, want ManualAnchor — ID mismatch must override SyncedAt+TimeLeftMinutes equality", got)
 	}
 }

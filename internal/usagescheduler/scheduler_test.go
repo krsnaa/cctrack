@@ -132,8 +132,15 @@ func (s *fakeStore) SaveWindowAnchor(a store.WindowAnchor) (int64, error) {
 	if err := s.saveErrFor[a.WindowType]; err != nil {
 		return 0, err
 	}
+	// Assign the row's ID before appending so savedAnchors() reflects the
+	// same int64 the production code received from the return value.
+	// This mirrors how store.SaveWindowAnchor would expose the row.ID
+	// after INSERT and lets metadata-recording tests assert the recorded
+	// ID matches the saved row, not merely "non-zero."
+	id := int64(len(s.saved) + 1)
+	a.ID = id
 	s.saved = append(s.saved, a)
-	return int64(len(s.saved)), nil
+	return id, nil
 }
 
 func (s *fakeStore) ObservedCostForWindow(windowType string, observedAt, resetsAt time.Time) (float64, error) {
@@ -1365,3 +1372,191 @@ func TestEarliestFutureReset(t *testing.T) {
 // _ marks errors imported but not always referenced (depending on test
 // case selection); keeps the import list stable.
 var _ = errors.Is
+
+// --- F8 tests: ProviderAnchors metadata recording ----------------------
+
+// TestSyncOnce_RecordsProviderAnchorMetadata pins F8 evidence: after a
+// successful provider-backed sync, Snapshot().ProviderAnchors contains
+// fingerprints for every window whose anchor was written, with ID and
+// other fields matching the persisted row.
+func TestSyncOnce_RecordsProviderAnchorMetadata(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+	provider := newFakeProvider(fakeResp{snap: snap})
+	store := newFakeStore()
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, store, nopLog).WithClock(newFakeClock(now))
+
+	got := sched.SyncOnce(context.Background())
+	if got.Status != "ok" {
+		t.Fatalf("Status = %q, want ok (precondition for metadata check)", got.Status)
+	}
+
+	state := sched.Snapshot()
+	if state.ProviderAnchors == nil {
+		t.Fatal("Snapshot().ProviderAnchors is nil after successful sync; want both windows recorded")
+	}
+
+	saved := store.savedAnchors()
+	if len(saved) != 2 {
+		t.Fatalf("expected 2 saved anchors, got %d", len(saved))
+	}
+
+	for _, a := range saved {
+		meta, ok := state.ProviderAnchors[a.WindowType]
+		if !ok {
+			t.Errorf("ProviderAnchors[%q] missing", a.WindowType)
+			continue
+		}
+		// Assert the recorded ID equals the saved row's ID, not merely
+		// non-zero. This pins that recordProviderAnchor stamps the
+		// SaveWindowAnchor return value (the DB row primary key), which
+		// is what DeriveWindowState matches against in production.
+		if meta.ID != a.ID {
+			t.Errorf("ProviderAnchors[%q].ID = %d, want %d (saved row ID)", a.WindowType, meta.ID, a.ID)
+		}
+		if meta.ID == 0 {
+			t.Errorf("ProviderAnchors[%q].ID = 0; SaveWindowAnchor must return non-zero row ID", a.WindowType)
+		}
+		if meta.SyncedAt != a.SyncedAt {
+			t.Errorf("ProviderAnchors[%q].SyncedAt = %q, want %q", a.WindowType, meta.SyncedAt, a.SyncedAt)
+		}
+		if meta.TimeLeftMinutes != a.TimeLeftMinutes {
+			t.Errorf("ProviderAnchors[%q].TimeLeftMinutes = %d, want %d", a.WindowType, meta.TimeLeftMinutes, a.TimeLeftMinutes)
+		}
+	}
+}
+
+// TestSyncOnce_PartialWriteRecordsOnlyWrittenWindow pins F8 partial-write
+// invariant: when 7d's resets_at is stale, only the 5h anchor is
+// persisted and only 5h metadata is recorded. ProviderAnchors must NOT
+// gain a 7d entry for the unwritten window.
+func TestSyncOnce_PartialWriteRecordsOnlyWrittenWindow(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	snap := usageprovider.Snapshot{
+		FiveHourUtilizationPercent: 42,
+		SevenDayUtilizationPercent: 73,
+		FiveHourResetsAt:           now.Add(2 * time.Hour),
+		SevenDayResetsAt:           now.Add(-1 * time.Minute), // stale
+		Observed:                   now,
+	}
+	provider := newFakeProvider(fakeResp{snap: snap})
+	store := newFakeStore()
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, store, nopLog).WithClock(newFakeClock(now))
+
+	if got := sched.SyncOnce(context.Background()); got.Status != "ok" {
+		t.Fatalf("Status = %q, want ok", got.Status)
+	}
+
+	state := sched.Snapshot()
+	if _, ok := state.ProviderAnchors["5h"]; !ok {
+		t.Error("ProviderAnchors[\"5h\"] missing; want recorded for written window")
+	}
+	if _, ok := state.ProviderAnchors["7d"]; ok {
+		t.Error("ProviderAnchors[\"7d\"] present; want absent because stale resets_at skipped the write")
+	}
+}
+
+// TestSyncOnce_FailureDoesNotRecordProviderAnchor pins the no-record-on-
+// failure invariant. SchemaDrift causes runOnce to return early before
+// any writeAnchorIfFresh call, so ProviderAnchors must remain unset.
+func TestSyncOnce_FailureDoesNotRecordProviderAnchor(t *testing.T) {
+	provider := newFakeProvider(fakeResp{err: usageprovider.ErrSchemaDrift})
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, newFakeStore(), nopLog).WithClock(newFakeClock(time.Now()))
+
+	if got := sched.SyncOnce(context.Background()); got.Status != "schema_drift" {
+		t.Fatalf("Status = %q, want schema_drift (precondition)", got.Status)
+	}
+	if state := sched.Snapshot(); len(state.ProviderAnchors) != 0 {
+		t.Errorf("ProviderAnchors = %+v after failure; want empty", state.ProviderAnchors)
+	}
+}
+
+// TestSyncOnce_SaveErrorDoesNotRecordProviderAnchor pins partial-write
+// fault path: if SaveWindowAnchor returns an error for one window, that
+// window's metadata is NOT recorded. The other window (which saved
+// successfully) still records.
+func TestSyncOnce_SaveErrorDoesNotRecordProviderAnchor(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+	provider := newFakeProvider(fakeResp{snap: snap})
+	store := newFakeStore()
+	store.saveErrFor["7d"] = errors.New("simulated 7d save failure")
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, store, nopLog).WithClock(newFakeClock(now))
+
+	sched.SyncOnce(context.Background())
+
+	state := sched.Snapshot()
+	if _, ok := state.ProviderAnchors["5h"]; !ok {
+		t.Error("ProviderAnchors[\"5h\"] missing; 5h save succeeded so its metadata must be recorded")
+	}
+	if _, ok := state.ProviderAnchors["7d"]; ok {
+		t.Error("ProviderAnchors[\"7d\"] present; 7d save failed so its metadata must NOT be recorded")
+	}
+}
+
+// TestSnapshot_ProviderAnchorsDeepCopy pins the copy-on-read race-safety
+// invariant: mutating the map returned by Snapshot must not affect the
+// scheduler's internal state observed by subsequent Snapshot calls.
+func TestSnapshot_ProviderAnchorsDeepCopy(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+	provider := newFakeProvider(fakeResp{snap: snap})
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, newFakeStore(), nopLog).WithClock(newFakeClock(now))
+	sched.SyncOnce(context.Background())
+
+	first := sched.Snapshot()
+	if first.ProviderAnchors == nil {
+		t.Fatal("ProviderAnchors nil after sync; precondition")
+	}
+	// Mutate the returned map.
+	delete(first.ProviderAnchors, "5h")
+	first.ProviderAnchors["7d"] = ProviderAnchorMeta{ID: -999}
+
+	// Subsequent snapshot must reflect the original recorded state, not
+	// the caller's mutations.
+	second := sched.Snapshot()
+	if _, ok := second.ProviderAnchors["5h"]; !ok {
+		t.Error("ProviderAnchors[\"5h\"] missing in second snapshot; first snapshot's delete leaked through (no deep copy)")
+	}
+	if meta := second.ProviderAnchors["7d"]; meta.ID == -999 {
+		t.Error("ProviderAnchors[\"7d\"].ID == -999 in second snapshot; first snapshot's mutation leaked through")
+	}
+}
+
+// TestScheduler_ProviderAnchorsRaceClean pins codex bar #5: concurrent
+// recordProviderAnchor (via SyncOnce/runOnce) and Snapshot reads must
+// not race when run with the -race detector. Run hundreds of iterations
+// to give the race detector a chance to fire.
+func TestScheduler_ProviderAnchorsRaceClean(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	// Pre-populate provider with many responses so repeated SyncOnce
+	// calls always have something to fetch.
+	snap := validSnapshot(now, 2*time.Hour, 7*24*time.Hour)
+	responses := make([]fakeResp, 200)
+	for i := range responses {
+		responses[i] = fakeResp{snap: snap}
+	}
+	provider := newFakeProvider(responses...)
+	sched := New(provider, func() (credentials.Credentials, error) { return validCreds(), nil }, newFakeStore(), nopLog).WithClock(newFakeClock(now))
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 100; i++ {
+			sched.SyncOnce(context.Background())
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < 1000; i++ {
+			st := sched.Snapshot()
+			// Touch the map so the race detector sees the read.
+			_ = len(st.ProviderAnchors)
+		}
+	}()
+
+	wg.Wait()
+}
