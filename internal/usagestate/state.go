@@ -96,11 +96,16 @@ func (s WindowHonestState) String() string {
 // (5h or 7d) from the scheduler's runtime snapshot, the latest
 // WindowAnchor for that window (nil if none), and the current clock.
 //
+// windowType is "5h" or "7d" — the caller's intent, not the anchor's
+// self-reported field. Trusting caller intent here keeps correctness
+// independent of DB row payload integrity.
+//
 // The derivation is pure: same inputs always produce the same output.
 // Callers gather the inputs from store.GetLatestAnchor +
 // (*usagescheduler.Scheduler).Snapshot() + time.Now().
 func DeriveWindowState(
 	schedState usagescheduler.State,
+	windowType string,
 	anchor *store.WindowAnchor,
 	now time.Time,
 ) WindowHonestState {
@@ -147,9 +152,25 @@ func DeriveWindowState(
 		return WindowHonestStateAutoStale
 	}
 
-	// Anchor exists but scheduler isn't actively producing fresh
-	// auto-syncs (either not running, or running but no successful
-	// fetch yet). Treat as manual entry.
+	// Scheduler is not actively producing fresh auto-syncs, but the
+	// latest stored anchor for this window may still be provider-
+	// written if it matches an in-memory fingerprint recorded by
+	// writeAnchorIfFresh in this process. Match on row ID first; the
+	// SyncedAt + TimeLeftMinutes equality guards against pathological
+	// row reuse or in-place mutation.
+	if meta, hasMeta := schedState.ProviderAnchors[windowType]; hasMeta {
+		if meta.ID == anchor.ID &&
+			meta.SyncedAt == anchor.SyncedAt &&
+			meta.TimeLeftMinutes == anchor.TimeLeftMinutes {
+			if resetsAt.After(now) {
+				return WindowHonestStateAutoFresh
+			}
+			return WindowHonestStateAutoStale
+		}
+	}
+
+	// Anchor exists but no matching provider-sync metadata. Treat as
+	// manual entry.
 	return WindowHonestStateManualAnchor
 }
 

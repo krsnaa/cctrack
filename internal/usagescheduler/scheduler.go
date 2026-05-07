@@ -132,10 +132,24 @@ const (
 	ErrorClassRateLimited
 )
 
+// ProviderAnchorMeta is the minimum fingerprint needed to recognize a
+// stored WindowAnchor as written by THIS process's provider sync.
+//
+// All fields are copies of values already persisted on the same DB row
+// (window_anchors.id, synced_at, time_left_minutes); no raw provider
+// response data is added beyond what store.SaveWindowAnchor already
+// accepts. ID is the primary discriminator; SyncedAt and
+// TimeLeftMinutes are belt-and-suspenders checks against pathological
+// row reuse or in-place mutation.
+type ProviderAnchorMeta struct {
+	ID              int64
+	SyncedAt        string
+	TimeLeftMinutes int
+}
+
 // State is a race-safe snapshot of the scheduler's runtime state. It is
 // kept in memory only (no DB writes); on serve restart it begins empty
-// and is repopulated by the first tick. Per EM ruling chat msg 20621
-// option A: in-memory accessor, no scheduler_state table.
+// and is repopulated by the first tick.
 type State struct {
 	// Running is true while Run() is in its main loop. Becomes false
 	// after Run returns (context canceled or permanent errStop).
@@ -147,6 +161,19 @@ type State struct {
 	// LastErrorClass is the classification of the most recent fetch
 	// failure. Reset to ErrorClassNone after a successful fetch.
 	LastErrorClass ErrorClass
+	// ProviderAnchors maps window_type ("5h" | "7d") to the fingerprint
+	// of the most recent anchor this process wrote from a provider sync.
+	// Empty on process start; populated only after writeAnchorIfFresh
+	// observes a successful SaveWindowAnchor for that window. Consumed by
+	// usagestate.DeriveWindowState so a provider-backed re-sync can
+	// classify as auto_fresh / auto_stale even when Running=false (e.g.
+	// after the background loop stopped on a permanent error class).
+	//
+	// On restart this is empty; old anchors degrade to manual_anchor
+	// until a fresh provider sync succeeds. That preserves the honest
+	// cold-state intent: cctrack does not vouch for anchor provenance it
+	// did not personally observe.
+	ProviderAnchors map[string]ProviderAnchorMeta
 }
 
 // Scheduler is the main type. Construct via New; run via Run.
@@ -241,10 +268,21 @@ func (s *Scheduler) WithOnAnchorsUpdated(cb OnAnchorsUpdated) *Scheduler {
 // Safe to call concurrently with Run from any goroutine; readers see a
 // stable point-in-time snapshot. Used by internal/usagestate to derive
 // the per-window honest-state enum surfaced in /api/v1/summary.
+//
+// The ProviderAnchors map is deep-copied so callers may inspect or
+// even mutate the returned snapshot without racing the scheduler's
+// concurrent recordProviderAnchor writes.
 func (s *Scheduler) Snapshot() State {
 	s.stateMu.Lock()
 	defer s.stateMu.Unlock()
-	return s.state
+	out := s.state
+	if s.state.ProviderAnchors != nil {
+		out.ProviderAnchors = make(map[string]ProviderAnchorMeta, len(s.state.ProviderAnchors))
+		for k, v := range s.state.ProviderAnchors {
+			out.ProviderAnchors[k] = v
+		}
+	}
+	return out
 }
 
 // setRunning is called at Run() entry/exit to track the loop's
@@ -266,11 +304,23 @@ func (s *Scheduler) recordFetchSuccess() {
 
 // recordFetchError stores the typed error class for the most recent
 // fetch failure. Raw error strings are NEVER stored — only the fixed
-// enum, per EM ruling chat msg 20621.
+// enum.
 func (s *Scheduler) recordFetchError(class ErrorClass) {
 	s.stateMu.Lock()
 	s.state.LastErrorClass = class
 	s.stateMu.Unlock()
+}
+
+// recordProviderAnchor stamps in-memory metadata identifying the latest
+// anchor this process wrote from a provider sync, keyed by window_type.
+// Called only after store.SaveWindowAnchor returns nil for that window.
+func (s *Scheduler) recordProviderAnchor(windowType string, meta ProviderAnchorMeta) {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+	if s.state.ProviderAnchors == nil {
+		s.state.ProviderAnchors = make(map[string]ProviderAnchorMeta)
+	}
+	s.state.ProviderAnchors[windowType] = meta
 }
 
 // Run blocks until ctx is canceled or a permanent error stops the loop.
@@ -535,10 +585,16 @@ func (s *Scheduler) writeAnchorIfFresh(snap usageprovider.Snapshot, windowType s
 		AnthropicPct:    &pct,
 		ObservedCost:    cost,
 	}
-	if _, err := s.store.SaveWindowAnchor(anchor); err != nil {
+	id, err := s.store.SaveWindowAnchor(anchor)
+	if err != nil {
 		s.log("%s: SaveWindowAnchor failed: %v", windowType, err)
 		return false
 	}
+	s.recordProviderAnchor(windowType, ProviderAnchorMeta{
+		ID:              id,
+		SyncedAt:        anchor.SyncedAt,
+		TimeLeftMinutes: anchor.TimeLeftMinutes,
+	})
 	return true
 }
 

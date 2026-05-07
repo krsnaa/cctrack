@@ -77,8 +77,8 @@ func (p *SummaryProvider) Build() (*store.Summary, error) {
 	schedState := p.scheduler.Snapshot()
 	now := p.now()
 
-	fiveState := DeriveWindowState(schedState, fiveAnchor, now)
-	sevenState := DeriveWindowState(schedState, sevenAnchor, now)
+	fiveState := DeriveWindowState(schedState, "5h", fiveAnchor, now)
+	sevenState := DeriveWindowState(schedState, "7d", sevenAnchor, now)
 	fiveStr := fiveState.String()
 	sevenStr := sevenState.String()
 	summary.Window5h.State = &fiveStr

@@ -117,6 +117,62 @@ func TestSummaryProvider_BuildSummaryErrorPropagates(t *testing.T) {
 	}
 }
 
+// TestSummaryProvider_BuildClearsManualPillAfterPostStopSyncOnce pins
+// F8's user-visible regression path: after the background scheduler
+// stops on a permanent error class and a successful manual SyncOnce
+// writes fresh provider anchors, Build() must classify both windows as
+// auto_fresh — the same state the dashboard renders to clear the
+// "Manual" pill. Prior to F8, both windows surfaced as manual_anchor
+// because DeriveWindowState's Running gate failed; the new
+// ProviderAnchors metadata flips the classification.
+//
+// This is the integration-path mirror of the pure DeriveWindowState
+// tests; it exercises GetLatestAnchor + Snapshot + DeriveWindowState
+// composition through SummaryProvider.Build.
+func TestSummaryProvider_BuildClearsManualPillAfterPostStopSyncOnce(t *testing.T) {
+	now := time.Date(2026, 5, 6, 12, 0, 0, 0, time.UTC)
+	fiveAnchor := validAnchor(now.Add(-30*time.Minute), 240) // 3.5h future
+	fiveAnchor.ID = 11
+	fiveAnchor.WindowType = "5h"
+	sevenAnchor := validAnchor(now.Add(-1*time.Hour), 7*24*60) // future
+	sevenAnchor.ID = 12
+	sevenAnchor.WindowType = "7d"
+
+	st := &fakeSummaryStore{
+		summary:     freshSummary(),
+		fiveAnchor:  fiveAnchor,
+		sevenAnchor: sevenAnchor,
+	}
+
+	// Scheduler state captured AFTER a permanent-error stop followed by
+	// a successful SyncOnce: Running=false (loop already exited),
+	// LastFetchSucceeded set by recordFetchSuccess, LastErrorClass
+	// cleared to None, ProviderAnchors populated for both windows.
+	sched := &fakeSchedSnapshotter{state: usagescheduler.State{
+		Running:            false,
+		LastFetchSucceeded: now.Add(-1 * time.Minute),
+		LastErrorClass:     usagescheduler.ErrorClassNone,
+		ProviderAnchors: map[string]usagescheduler.ProviderAnchorMeta{
+			"5h": {ID: 11, SyncedAt: fiveAnchor.SyncedAt, TimeLeftMinutes: 240},
+			"7d": {ID: 12, SyncedAt: sevenAnchor.SyncedAt, TimeLeftMinutes: 7 * 24 * 60},
+		},
+	}}
+	p := NewSummaryProvider(st, sched).WithClock(func() time.Time { return now })
+
+	got, err := p.Build()
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if got.Window5h.State == nil || *got.Window5h.State != "auto_fresh" {
+		t.Errorf("Window5h.State = %v, want auto_fresh — Manual pill should clear after provider-backed re-sync from stopped scheduler",
+			got.Window5h.State)
+	}
+	if got.Window7d.State == nil || *got.Window7d.State != "auto_fresh" {
+		t.Errorf("Window7d.State = %v, want auto_fresh — Manual pill should clear after provider-backed re-sync from stopped scheduler",
+			got.Window7d.State)
+	}
+}
+
 // TestSummaryProvider_BuildAnchorErrorIsTreatedAsNoAnchor verifies the
 // "graceful degradation" choice: if GetLatestAnchor fails for one window
 // (transient DB hiccup, etc.), the derivation treats that window as if no
