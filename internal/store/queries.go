@@ -37,6 +37,18 @@ type WindowBucket struct {
 	// cost/cap derivation when present. Nil when no fresh anchor is in use
 	// (e.g., cascade fallback) or the anchor was synced without a percentage.
 	Pct *float64 `json:"pct,omitempty"`
+	// AnchorCost is observed_cost recorded on the currently-active anchor
+	// at sync time. Together with AnchorCap, lets clients project bar fill
+	// between syncs as Pct + (Cost - AnchorCost) / AnchorCap * 100, so the
+	// bar grows with usage while staying calibrated against the same row
+	// the upstream pct was reported for. Nil when no fresh anchor is in use.
+	AnchorCost *float64 `json:"anchor_cost,omitempty"`
+	// AnchorCap is inferred_cap on the currently-active anchor (cost/pct
+	// from the same row, not GetLatestCap's walk-past-null fallback). Nil
+	// when the anchor was written with anthropic_pct = 0 — in that case
+	// clients can't extrapolate and should freeze the bar at Pct until the
+	// next sync.
+	AnchorCap *float64 `json:"anchor_cap,omitempty"`
 	// LastSyncedAt is when the user last anchored this window from claude.ai.
 	// Surfaced on the bar so a stale anchor is visible at a glance — sync
 	// drift accumulates and re-syncs are how the user corrects it.
@@ -167,6 +179,15 @@ func (s *Store) windowFromAnchorOrCascade(windowType string, duration time.Durat
 	if used && a.AnthropicPct != nil {
 		v := *a.AnthropicPct
 		bucket.Pct = &v
+		// Pair the pct with the same-row cost and cap so clients can
+		// extrapolate bar fill from the anchor moment without falling
+		// back to cross-account-leaky GetLatestCap.
+		ac := a.ObservedCost
+		bucket.AnchorCost = &ac
+		if a.InferredCap != nil {
+			ic := *a.InferredCap
+			bucket.AnchorCap = &ic
+		}
 	}
 	if a != nil && a.SyncedAt != "" {
 		ts := a.SyncedAt

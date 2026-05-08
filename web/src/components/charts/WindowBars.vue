@@ -321,8 +321,24 @@ function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): 
   }
   // Provider pct is authoritative for the current account when present;
   // the cost/denom derivation can show stale/cross-account values because
-  // the local requests ledger isn't keyed by account.
-  const usagePct = w.pct != null ? w.pct : (w.cost / denom) * 100
+  // the local requests ledger isn't keyed by account. When the active
+  // anchor also carries a same-row cost+cap, project bar fill forward as
+  // pct + (cost - anchor_cost) / anchor_cap * 100 — same algebra the old
+  // cost/cap path produced via cancellation, but sourced entirely from
+  // one anchor row so it can't leak across accounts.
+  let usagePct: number
+  if (
+    w.pct != null &&
+    w.anchor_cost != null &&
+    w.anchor_cap != null &&
+    w.anchor_cap > 0
+  ) {
+    usagePct = w.pct + ((w.cost - w.anchor_cost) / w.anchor_cap) * 100
+  } else if (w.pct != null) {
+    usagePct = w.pct
+  } else {
+    usagePct = (w.cost / denom) * 100
+  }
   const usageWidth = Math.max(0, Math.min(100, usagePct))
   // Pace = how far ahead/behind the time marker the usage fill is. Same metric
   // for both directions; sign tells us which.

@@ -30,6 +30,14 @@ export interface WindowBucket {
   // ledger and the currently-authenticated account diverge (e.g. account
   // switch).
   pct?: number | null
+  // Observed_cost recorded on the active anchor at sync time. With
+  // anchor_cap, lets the bar progress between syncs:
+  // pct + (cost - anchor_cost) / anchor_cap * 100.
+  anchor_cost?: number | null
+  // Inferred_cap on the active anchor (same row as pct, not the
+  // walk-past-null fallback). Nil when the anchor was written with pct=0;
+  // bar then freezes at pct until the next sync.
+  anchor_cap?: number | null
   last_synced_at?: string | null
   // F2 S2.3 honest-state enum populated by usagestate.SummaryProvider on
   // the backend. One of: auto_fresh, auto_stale, token_expired,
