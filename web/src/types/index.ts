@@ -24,6 +24,12 @@ export interface WindowBucket {
   prev_cost: number
   prev_start: string
   cap?: number | null
+  // Upstream-reported utilization (0-100) for the active anchor's window.
+  // When present, this is the authoritative signal for bar fill — preferred
+  // over the cost/cap derivation, which can drift if the local request
+  // ledger and the currently-authenticated account diverge (e.g. account
+  // switch).
+  pct?: number | null
   last_synced_at?: string | null
   // F2 S2.3 honest-state enum populated by usagestate.SummaryProvider on
   // the backend. One of: auto_fresh, auto_stale, token_expired,

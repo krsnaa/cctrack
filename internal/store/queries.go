@@ -31,6 +31,12 @@ type WindowBucket struct {
 	// from the most recent sync against claude.ai (cost / pct). Nil when no
 	// sync with a percentage exists yet — clients fall back to prev_cost.
 	Cap *float64 `json:"cap,omitempty"`
+	// Pct is the upstream-reported utilization percentage (0-100) for this
+	// window from the latest anchor in active use. Authoritative for the
+	// currently-authenticated account; clients should prefer this over the
+	// cost/cap derivation when present. Nil when no fresh anchor is in use
+	// (e.g., cascade fallback) or the anchor was synced without a percentage.
+	Pct *float64 `json:"pct,omitempty"`
 	// LastSyncedAt is when the user last anchored this window from claude.ai.
 	// Surfaced on the bar so a stale anchor is visible at a glance — sync
 	// drift accumulates and re-syncs are how the user corrects it.
@@ -153,6 +159,14 @@ func (s *Store) windowFromAnchorOrCascade(windowType string, duration time.Durat
 	cap, err := s.GetLatestCap(windowType)
 	if err == nil && cap != nil {
 		bucket.Cap = cap
+	}
+	// Surface the upstream pct only when the anchor whose window we're
+	// using is the same one that carries the pct. Anchors whose window has
+	// already elapsed describe a different reference window and would
+	// mislead the bar if surfaced here.
+	if used && a.AnthropicPct != nil {
+		v := *a.AnthropicPct
+		bucket.Pct = &v
 	}
 	if a != nil && a.SyncedAt != "" {
 		ts := a.SyncedAt

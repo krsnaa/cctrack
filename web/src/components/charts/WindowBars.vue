@@ -309,7 +309,7 @@ function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): 
   const meta = stateMetaFor(w.state)
   // F3 S3.1: imputed cap label, omitted when no cap is inferred yet.
   const capLabel = w.cap && w.cap > 0 ? `~$${w.cap.toFixed(2)} cap` : ''
-  if (denom <= 0) {
+  if (w.pct == null && denom <= 0) {
     return {
       title, timePct, usagePct: 0, usageWidth: 0, hasDenom: false,
       paceText: 'sync to enable', paceClass: '',
@@ -319,7 +319,10 @@ function buildBar(title: string, w: WindowBucket | null, longHorizon: boolean): 
       capLabel,
     }
   }
-  const usagePct = (w.cost / denom) * 100
+  // Provider pct is authoritative for the current account when present;
+  // the cost/denom derivation can show stale/cross-account values because
+  // the local requests ledger isn't keyed by account.
+  const usagePct = w.pct != null ? w.pct : (w.cost / denom) * 100
   const usageWidth = Math.max(0, Math.min(100, usagePct))
   // Pace = how far ahead/behind the time marker the usage fill is. Same metric
   // for both directions; sign tells us which.
