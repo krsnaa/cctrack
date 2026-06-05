@@ -43,6 +43,34 @@ function sortGroups(groups: ProjectGroup[], sortBy: string, sortDir: 'asc' | 'de
   })
 }
 
+// Token total shown in the Sessions table (and the same definition the backend
+// sorts "tokens" by): input + output + cache_read + cache_write (5m + 1h).
+function sessionTotalTokens(s: Session): number {
+  return s.total_input + s.total_output + s.total_cache_read + s.total_cache_write
+}
+
+const sessionSortValues: Record<string, (s: Session) => string | number> = {
+  cost: s => s.total_cost,
+  date: s => s.last_activity,
+  started: s => s.started_at,
+  tokens: sessionTotalTokens,
+  project: s => s.project,
+}
+
+// sortSessions orders a project's child sessions by the same column/direction
+// the table header drives, so expanding a project (or toggling the sort while
+// expanded) keeps the inner rows in sync with the parent group ordering.
+function sortSessions(sessions: Session[], sortBy: string, sortDir: 'asc' | 'desc'): Session[] {
+  const valueOf = sessionSortValues[sortBy] ?? sessionSortValues.date
+  const factor = sortDir === 'desc' ? -1 : 1
+  return [...sessions].sort((a, b) => {
+    const av = valueOf(a)
+    const bv = valueOf(b)
+    if (av === bv) return 0
+    return av < bv ? -1 * factor : 1 * factor
+  })
+}
+
 // mapDrilldownToGroups adapts the wire shape (DayDrilldown) into the existing
 // store shape (ProjectGroup[] + Session[] keyed by project). Field mapping:
 //   • day_cost   → total_cost
@@ -135,12 +163,25 @@ export const useSessionsStore = defineStore('sessions', () => {
         // Pre-populate the per-project child cache from the same payload —
         // saves a second round-trip on group expand and guarantees children
         // agree with the parent rollup (same response, same date predicate).
-        childSessions.value = mapped.sessionsByProject
+        // Order each project's sessions by the active sort so the inner rows
+        // match the column the user is sorting by.
+        const sorted = new Map<string, Session[]>()
+        for (const [proj, sess] of mapped.sessionsByProject) {
+          sorted.set(proj, sortSessions(sess, sortBy.value, sortDir.value))
+        }
+        childSessions.value = sorted
       } else {
         const res = await fetchSessionsGrouped(sortBy.value, sortDir.value, '')
         groups.value = res.groups || []
         total.value = res.total
-        childSessions.value = new Map()
+        // Re-order (rather than discard) any already-expanded project's cached
+        // sessions so toggling the sort header re-sorts the inner rows in place
+        // instead of blanking them until the next expand.
+        const resorted = new Map<string, Session[]>()
+        for (const [proj, sess] of childSessions.value) {
+          resorted.set(proj, sortSessions(sess, sortBy.value, sortDir.value))
+        }
+        childSessions.value = resorted
       }
     } catch (e: any) {
       const msg = e?.message || 'Failed to load sessions'
@@ -167,9 +208,14 @@ export const useSessionsStore = defineStore('sessions', () => {
     try {
       // Pull all sessions for this project in the current date slice. The
       // backend default limit is 25; widen so a heavy project shows them all
-      // without inner pagination on the expanded section.
-      const res = await fetchSessions(500, 0, 'date', 'desc', '', project)
-      childSessions.value = new Map(childSessions.value).set(project, res.sessions || [])
+      // without inner pagination on the expanded section. Fetch (and re-sort
+      // client-side) by the active sort so the inner rows follow the column the
+      // user picked rather than always falling back to most-recent-first.
+      const res = await fetchSessions(500, 0, sortBy.value, sortDir.value, '', project)
+      childSessions.value = new Map(childSessions.value).set(
+        project,
+        sortSessions(res.sessions || [], sortBy.value, sortDir.value),
+      )
     } finally {
       childLoading.value.delete(project)
     }
