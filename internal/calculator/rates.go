@@ -4,8 +4,8 @@ package calculator
 // a rate changes or a model is added — the dashboard surfaces them so users can
 // tell at a glance whether their build is on stale pricing.
 const (
-	RatesVersion = "v1.3"
-	RatesUpdated = "2026-05-03"
+	RatesVersion = "v1.4"
+	RatesUpdated = "2026-06-05"
 )
 
 type ModelRates struct {
@@ -22,7 +22,8 @@ type ModelRates struct {
 // first (e.g. "claude-opus-4-7" before "claude-opus-4-1" before "claude-opus-4").
 // Source: https://platform.claude.com/docs/en/about-claude/pricing
 var Rates = []ModelRates{
-	// Opus 4.5 / 4.6 / 4.7 — current tier (3x cheaper than the original Opus 4 / 4.1).
+	// Opus 4.5 / 4.6 / 4.7 / 4.8 — current tier (3x cheaper than the original Opus 4 / 4.1).
+	{Family: "claude-opus-4-8", Released: "2026-05-28", InputPerMToken: 5.00, OutputPerMToken: 25.00, CacheReadPerMToken: 0.50, CacheWrite5mPerMToken: 6.25, CacheWrite1hPerMToken: 10.00},
 	{Family: "claude-opus-4-7", Released: "2026-04-16", InputPerMToken: 5.00, OutputPerMToken: 25.00, CacheReadPerMToken: 0.50, CacheWrite5mPerMToken: 6.25, CacheWrite1hPerMToken: 10.00},
 	{Family: "claude-opus-4-6", Released: "2026-02-05", InputPerMToken: 5.00, OutputPerMToken: 25.00, CacheReadPerMToken: 0.50, CacheWrite5mPerMToken: 6.25, CacheWrite1hPerMToken: 10.00},
 	{Family: "claude-opus-4-5", Released: "2025-11-24", InputPerMToken: 5.00, OutputPerMToken: 25.00, CacheReadPerMToken: 0.50, CacheWrite5mPerMToken: 6.25, CacheWrite1hPerMToken: 10.00},
